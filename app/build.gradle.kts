@@ -98,6 +98,12 @@ android {
         }
     }
 
+    // Room exports its schema so migrations can be reviewed in code review.
+    ksp {
+        arg("room.schemaLocation", "$projectDir/schemas")
+        arg("room.generateKotlin", "true")
+    }
+
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
