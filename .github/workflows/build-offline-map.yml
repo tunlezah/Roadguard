@@ -1,0 +1,181 @@
+name: Build offline map
+
+# Builds Roadguard's whole-of-Australia offline map archive and publishes it as a release asset,
+# then updates the app's catalogue with the artifact's real size and SHA-256.
+#
+# This exists because Roadguard hosts its own map data. The OpenStreetMap data is ODbL and free to
+# redistribute, but pointing an app's first-run download at Geofabrik, BBBike, Protomaps or
+# VersaTiles would make somebody else's donation-funded server pay for our installs -- Protomaps
+# discourages hotlinking outright and Mapsforge's server is labelled "not suitable for mass
+# downloads". So: build once, host once, attribute properly.
+#
+# Run it from the Actions tab. It takes roughly ten minutes and produces a ~1.1 GB asset.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish the archive under"
+        required: true
+        default: "map-australia-v1"
+      area:
+        description: "Geofabrik area to build"
+        required: true
+        default: "australia"
+      update_catalogue:
+        description: "Commit the new size and checksum into app/src/main/assets/map_packages.json"
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and publish the Australia archive
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Report available disk
+        run: df -h
+
+      - name: Build the archive
+        env:
+          # The runner's root filesystem is small; its temp disk is not. planetiler needs roughly
+          # 6 GB of working space for Australia (1.8 GB of source data, 2.8 GB of sorted features
+          # and a 1.1 GB output).
+          ROADGUARD_MAP_WORK: ${{ runner.temp }}/map-work
+          ROADGUARD_MAP_AREA: ${{ inputs.area }}
+          ROADGUARD_MAP_HEAP: 6g
+        run: tools/build_australia_pmtiles.sh "${{ runner.temp }}/map-out"
+
+      - name: Verify the archive with the pmtiles CLI
+        run: |
+          set -euo pipefail
+          cd "${{ runner.temp }}"
+          VERSION=$(curl -fsSL https://proxy.golang.org/github.com/protomaps/go-pmtiles/@latest \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["Version"].lstrip("v"))')
+          echo "go-pmtiles $VERSION"
+          curl -fsSL -o pmtiles.tar.gz \
+            "https://github.com/protomaps/go-pmtiles/releases/download/v${VERSION}/go-pmtiles_${VERSION}_Linux_x86_64.tar.gz"
+          tar xzf pmtiles.tar.gz
+          ./pmtiles verify map-out/australia-shortbread.pmtiles
+          ./pmtiles show map-out/australia-shortbread.pmtiles
+
+      - name: Check the style's source layers exist in the archive
+        run: |
+          set -euo pipefail
+          cd "${{ runner.temp }}"
+          ./pmtiles show --metadata map-out/australia-shortbread.pmtiles > metadata.json
+          python3 - <<'PY'
+          import json, os, sys
+          meta = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "metadata.json")))
+          layers = meta.get("vector_layers") or []
+          if isinstance(layers, str):
+              layers = json.loads(layers)
+          available = {layer["id"] for layer in layers}
+          style = json.load(open("app/src/main/assets/map/style-day.json"))
+          used = {l["source-layer"] for l in style["layers"] if l.get("source-layer")}
+          missing = sorted(used - available)
+          print("archive layers:", sorted(available))
+          print("style layers  :", sorted(used))
+          if missing:
+              sys.exit(f"style references source layers absent from the archive: {missing}")
+          print("every source layer the style uses is present")
+          PY
+        working-directory: ${{ github.workspace }}
+
+      - name: Publish the release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag }}"
+          OUT="${{ runner.temp }}/map-out"
+          BYTES=$(stat -c%s "$OUT/australia-shortbread.pmtiles")
+          SHA=$(cut -d' ' -f1 < "$OUT/australia-shortbread.pmtiles.sha256")
+
+          {
+            echo "Offline map archive for Roadguard."
+            echo
+            echo "- Format: PMTiles v3, Shortbread 1.0 vector schema, zoom 0-14"
+            echo "- Built by \`tools/build_australia_pmtiles.sh\` with planetiler from OpenStreetMap data"
+            echo "- Size: $BYTES bytes"
+            echo "- SHA-256: \`$SHA\`"
+            echo
+            echo "Map data (c) OpenStreetMap contributors, licensed under the Open Database License 1.0."
+            echo "The app verifies this file's size and checksum before installing it."
+          } > "$OUT/notes.md"
+
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --title "Offline map: Australia" --notes-file "$OUT/notes.md"
+          gh release upload "$TAG" "$OUT/australia-shortbread.pmtiles" \
+            "$OUT/australia-shortbread.pmtiles.sha256" --clobber
+          gh release edit "$TAG" --notes-file "$OUT/notes.md"
+
+          {
+            echo "### Offline map published"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Tag | \`$TAG\` |"
+            echo "| Size | $BYTES bytes ($((BYTES / 1024 / 1024)) MiB) |"
+            echo "| SHA-256 | \`$SHA\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "MAP_BYTES=$BYTES" >> "$GITHUB_ENV"
+          echo "MAP_SHA=$SHA" >> "$GITHUB_ENV"
+
+      - name: Update the app catalogue
+        if: ${{ inputs.update_catalogue }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          path = "app/src/main/assets/map_packages.json"
+          document = json.load(open(path))
+          tag = os.environ["TAG"]
+          for entry in document["packages"]:
+              if entry["id"] == "australia-shortbread":
+                  entry["sizeBytes"] = int(os.environ["MAP_BYTES"])
+                  entry["sha256"] = os.environ["MAP_SHA"]
+                  entry["downloadUrl"] = (
+                      f"https://github.com/{os.environ['REPO']}/releases/download/{tag}/"
+                      "australia-shortbread.pmtiles"
+                  )
+          with open(path, "w") as handle:
+              json.dump(document, handle, indent=2)
+              handle.write("\n")
+          print(open(path).read())
+          PY
+        env:
+          TAG: ${{ inputs.tag }}
+          REPO: ${{ github.repository }}
+
+      - name: Commit the catalogue
+        if: ${{ inputs.update_catalogue }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- app/src/main/assets/map_packages.json; then
+            echo "catalogue already matches the published archive"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/assets/map_packages.json
+          git commit -m "Point the offline map catalogue at ${{ inputs.tag }}
+
+          Size and SHA-256 taken from the archive published by the build-offline-map workflow, so
+          the app verifies the exact bytes that were released."
+          git push

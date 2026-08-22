@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Roadguard shares recordings (and diagnostics reports) with other apps only through an
+  explicit user action, via a FileProvider that exposes nothing beyond the app's own
+  external files directory.
+-->
+<paths>
+    <external-files-path name="recordings" path="recordings/" />
+    <external-files-path name="events" path="events/" />
+    <external-files-path name="tracks" path="tracks/" />
+    <external-files-path name="diagnostics" path="diagnostics/" />
+</paths>

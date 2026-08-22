@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive launcher icon derived from the repository's icon.png by
+  tools/generate_icons.py. The background is the artwork's own surround colour and the
+  foreground places the artwork badge inside the 72dp guaranteed-visible area, so no
+  launcher mask can crop the Roadguard branding.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>

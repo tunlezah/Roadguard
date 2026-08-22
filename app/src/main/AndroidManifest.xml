@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      Runtime (dangerous) permissions. Roadguard asks for the minimum it needs, when it needs it:
+      RECORD_AUDIO is declared so it *can* be requested, but it is only ever requested if the user
+      turns microphone recording on, which is off by default.
+    -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+      Foreground service plumbing. Android 14 requires a declared type per capability, and requires
+      the matching FOREGROUND_SERVICE_* permission for each type the service claims.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+    <!-- A camera foreground service keeps the process important but does not keep the CPU awake
+         with the screen off, so video-only recording holds a partial wake lock while it records. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- Offline-first: the network is used only for the one-off offline map install, map updates
+         and (optionally) weather. Recording never waits for it. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!--
+      MapLibre's manifest contributes ACCESS_WIFI_STATE for its own connectivity detection.
+      Roadguard's map reads only local files and never contacts a tile server, so the permission
+      buys nothing and is removed from the merged manifest rather than being shipped unused.
+    -->
+    <uses-permission
+        android:name="android.permission.ACCESS_WIFI_STATE"
+        tools:node="remove" />
+
+    <!-- Deliberately NOT requested:
+           ACCESS_BACKGROUND_LOCATION            - a location-typed foreground service covers
+                                                   while-in-use access; background location is not
+                                                   needed and is a large privacy ask.
+           REQUEST_IGNORE_BATTERY_OPTIMIZATIONS  - Roadguard explains how to exempt itself in
+                                                   Android's own settings rather than prompting.
+           WRITE_EXTERNAL_STORAGE / MANAGE_...   - recordings live in app-specific external storage.
+           READ_MEDIA_*                          - Roadguard never reads the user's media.
+           HIGH_SAMPLING_RATE_SENSORS            - the impact detector samples at 100 Hz, under the
+                                                   200 Hz threshold that would require it. -->
+
+    <uses-feature android:name="android.hardware.camera.any" android:required="true" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
+    <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <application
+        android:name=".RoadguardApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:enableOnBackInvokedCallback="true"
+        android:fullBackupContent="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Roadguard">
+
+        <!--
+          No android:screenOrientation here. Roadguard behaves like a normal camera app: the
+          orientation the user mounts the phone in is the orientation it records in, and the
+          activity applies the user's chosen orientation mode at runtime instead. Declaring
+          configChanges keeps the activity alive through a rotation so the preview does not blink;
+          the recording itself is owned by the service and is unaffected either way.
+        -->
+        <activity
+            android:name=".ui.MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|density|uiMode|navigation"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:showWhenLocked="true"
+            android:theme="@style/Theme.Roadguard">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          The recorder. Started only from a visible activity: that visibility is what grants the
+          process its while-in-use camera capability for the life of the service, which is what lets
+          recording continue with the screen off. stopWithTask=false so swiping the app away from
+          Recents does not silently end a drive's recording.
+        -->
+        <service
+            android:name=".recording.RecordingService"
+            android:exported="false"
+            android:foregroundServiceType="camera|location|microphone"
+            android:stopWithTask="false" />
+
+        <!--
+          Sharing a recording or a diagnostics report is always an explicit user action, and goes
+          through a FileProvider that exposes nothing outside Roadguard's own directories.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

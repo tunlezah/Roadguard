@@ -1,0 +1,29 @@
+# Build output
+/build
+/app/build
+.gradle/
+/captures
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+
+# Local configuration -- must never be committed
+local.properties
+keystore.properties
+*.jks
+*.keystore
+*.p12
+*.pem
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Generated diagnostics/benchmark output written by the developer tooling
+/benchmark-out/
+
+# Written by the CI dependency-audit step
+/deps.txt
