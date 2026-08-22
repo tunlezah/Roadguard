@@ -173,11 +173,13 @@ class LocationEngine(
     }
 
     private fun bestProvider(manager: LocationManager): String? {
-        val candidates = buildList {
-            if (android.os.Build.VERSION.SDK_INT >= 31) add(LocationManager.FUSED_PROVIDER)
-            add(LocationManager.GPS_PROVIDER)
-            add(LocationManager.NETWORK_PROVIDER)
-        }
+        // FUSED_PROVIDER exists from API 31 and minSdk is 34, so it needs no guard. It is
+        // preferred because it is the platform's own sensor fusion -- no Play Services involved.
+        val candidates = listOf(
+            LocationManager.FUSED_PROVIDER,
+            LocationManager.GPS_PROVIDER,
+            LocationManager.NETWORK_PROVIDER,
+        )
         return candidates.firstOrNull { provider ->
             runCatching { manager.isProviderEnabled(provider) }.getOrDefault(false)
         }

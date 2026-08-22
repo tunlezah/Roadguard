@@ -1,3 +1,12 @@
+// Camera2 interop is how a camera's hardware level, focal lengths and active-array size are read;
+// there is no non-interop path to them, and CameraX marks the bridge experimental rather than
+// unstable. ExperimentalLensFacing covers the external-camera constant. Both opt-ins are
+// deliberate and confined to this probe, which is the only place Roadguard reaches below CameraX.
+@file:OptIn(
+    androidx.camera.camera2.interop.ExperimentalCamera2Interop::class,
+    androidx.camera.core.ExperimentalLensFacing::class,
+)
+
 package io.github.tunlezah.roadguard.capability
 
 import android.app.ActivityManager
@@ -12,6 +21,7 @@ import android.view.WindowManager
 import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.DynamicRange
+import androidx.camera.video.QualitySelector
 import androidx.camera.video.Recorder
 import io.github.tunlezah.roadguard.camera.CameraSession
 import io.github.tunlezah.roadguard.event.EventSensorSource
@@ -101,12 +111,14 @@ class DeviceCapabilityProbe(
                 .map { CameraSession.nameFor(it) }
         }.getOrDefault(emptyList())
 
+        // QualitySelector.getResolution is the public accessor; VideoCapabilities.getResolution
+        // is library-restricted.
         val resolutions = runCatching {
-            val capabilities = Recorder.getVideoCapabilities(info)
-            capabilities.getSupportedQualities(DynamicRange.SDR).mapNotNull { quality ->
-                capabilities.getResolution(quality, DynamicRange.SDR)
-                    ?.let { Resolution(it.width, it.height) }
-            }
+            Recorder.getVideoCapabilities(info)
+                .getSupportedQualities(DynamicRange.SDR)
+                .mapNotNull { quality ->
+                    QualitySelector.getResolution(info, quality)?.let { Resolution(it.width, it.height) }
+                }
         }.getOrDefault(emptyList())
 
         val frameRateRanges = runCatching {
@@ -137,8 +149,15 @@ class DeviceCapabilityProbe(
                 Recorder.getVideoCapabilities(info).isStabilizationSupported
             }.getOrDefault(false),
             supportedDynamicRanges = runCatching {
+                // is10BitHdr is library-restricted; the encoding and bit depth are public.
                 Recorder.getVideoCapabilities(info).supportedDynamicRanges.map { range ->
-                    if (range.is10BitHdr) "HDR-10bit" else "SDR"
+                    when {
+                        range.bitDepth == DynamicRange.BIT_DEPTH_10_BIT &&
+                            range.encoding != DynamicRange.ENCODING_SDR -> "HDR 10-bit"
+
+                        range.encoding == DynamicRange.ENCODING_SDR -> "SDR"
+                        else -> "encoding ${range.encoding}, ${range.bitDepth}-bit"
+                    }
                 }
             }.getOrDefault(listOf("SDR")),
             isLogicalMultiCamera = runCatching { info.isLogicalMultiCameraSupported }.getOrDefault(false),

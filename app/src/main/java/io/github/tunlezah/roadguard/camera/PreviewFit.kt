@@ -168,7 +168,14 @@ data class PreviewFitResult(
 
     /** Short human-readable summary for the preview-zoom control. */
     fun describe(): String = buildString {
-        append(String.format("%.2fx", effectiveZoom).removeSuffix("0").removeSuffix("."))
+        // The user's locale is the right one for a number shown to them, but it has to be said
+        // explicitly: an implicit default is the classic source of "1.25x" becoming "1,25x" only
+        // on some devices.
+        append(
+            String.format(java.util.Locale.getDefault(), "%.2fx", effectiveZoom)
+                .removeSuffix("0")
+                .removeSuffix("."),
+        )
         if (isAuto) append(" (Auto)")
         when {
             croppedFraction > 0.005f -> append(" - display crop ${(croppedFraction * 100).toInt()}%")

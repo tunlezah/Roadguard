@@ -1,6 +1,5 @@
 package io.github.tunlezah.roadguard.ui.theme
 
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
@@ -35,16 +34,14 @@ fun RoadguardTheme(
         ThemeSetting.Oled -> ThemeMode.Oled
     }
 
+    // Dynamic colour arrived in API 31 and minSdk is 34, so it needs no availability check.
     val context = LocalContext.current
-    val dynamicAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
     val scheme = when {
-        useDynamicColour && dynamicAvailable && mode == ThemeMode.Light ->
-            dynamicLightColorScheme(context)
+        useDynamicColour && mode == ThemeMode.Light -> dynamicLightColorScheme(context)
 
-        useDynamicColour && dynamicAvailable && mode == ThemeMode.Dark ->
-            dynamicDarkColorScheme(context)
+        useDynamicColour && mode == ThemeMode.Dark -> dynamicDarkColorScheme(context)
 
-        useDynamicColour && dynamicAvailable && mode == ThemeMode.Oled ->
+        useDynamicColour && mode == ThemeMode.Oled ->
             // Keep the user's dynamic hues but force the true-black surfaces OLED implies.
             dynamicDarkColorScheme(context).copy(
                 background = OledBackground,

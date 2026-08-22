@@ -65,9 +65,32 @@
             "sand",
             "beach",
             "scree",
-            "bare_rock"
+            "shingle",
+            "bare_rock",
+            "quarry"
           ],
           "#1E1D17",
+          [
+            "bog",
+            "marsh",
+            "string",
+            "swamp",
+            "wet_meadow",
+            "fen"
+          ],
+          "#10201F",
+          [
+            "residential",
+            "commercial",
+            "industrial",
+            "retail",
+            "garages",
+            "railway",
+            "brownfield",
+            "greenfield",
+            "landfill"
+          ],
+          "#171A1D",
           "#14231A"
         ],
         "fill-opacity": 0.75
@@ -418,7 +441,7 @@
       "type": "line",
       "source": "roadguard",
       "source-layer": "ferries",
-      "minzoom": 8,
+      "minzoom": 10,
       "paint": {
         "line-color": "#2A4A5C",
         "line-width": 1.2,

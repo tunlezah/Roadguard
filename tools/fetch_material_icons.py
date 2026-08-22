@@ -22,45 +22,22 @@ RAW = "https://raw.githubusercontent.com/google/material-design-icons/master"
 INDEX = f"{RAW}/update/current_versions.json"
 OUT = os.path.join("app", "src", "main", "res", "drawable")
 
-# Standard Material Icon names used by the Roadguard UI, grouped by what they label.
+# The exact set of standard Material Icon names the Roadguard UI references. Kept in step with
+# the code by tools/check_material_icons.py, which fails if the two ever diverge -- an unused
+# icon is dead weight in the APK and a missing one is a crash.
 ICONS = [
-    # recording / camera
-    "videocam", "videocam_off", "photo_camera", "cameraswitch", "flip_camera_android",
-    "fiber_manual_record", "radio_button_checked", "radio_button_unchecked", "stop",
-    "pause", "movie", "video_library", "hd", "high_quality", "aspect_ratio",
-    "crop_free", "zoom_in", "zoom_out", "zoom_out_map", "fullscreen", "fullscreen_exit",
-    "visibility", "visibility_off", "timer", "flare",
-    # audio
-    "mic", "mic_off", "volume_up", "volume_off",
-    # protection
-    "lock", "lock_open", "shield", "verified_user", "bookmark", "security", "privacy_tip",
-    # power / battery
-    "bolt", "power", "battery_full", "battery_alert", "battery_charging_full", "power_off",
-    # thermal
-    "device_thermostat", "thermostat", "ac_unit",
-    # storage
-    "storage", "sd_storage", "sd_card", "save", "folder", "folder_open", "delete_sweep",
-    # map / location
-    "map", "layers", "my_location", "location_on", "location_off", "location_searching",
-    "gps_fixed", "gps_not_fixed", "gps_off", "navigation", "near_me", "explore",
-    "satellite_alt", "pin_drop", "route", "terrain", "north", "download_for_offline",
-    # display / theme
-    "brightness_high", "brightness_low", "brightness_6", "dark_mode", "light_mode",
-    "contrast", "palette", "screen_lock_portrait", "stay_current_portrait",
-    "stay_current_landscape", "splitscreen",
-    # weather
-    "cloud", "cloud_off", "water_drop", "air", "wb_sunny", "nights_stay", "umbrella",
-    # status / diagnostics
-    "warning", "error", "error_outline", "report_problem", "bug_report", "description",
-    "insert_drive_file", "memory", "smartphone", "sensors", "vibration", "speed",
-    "history", "restore", "schedule", "tune", "help_outline", "check_circle", "cancel",
-    "sync", "sync_problem", "open_in_new", "content_copy", "download", "upload_file",
-    # navigation chrome
-    "expand_more", "expand_less", "chevron_right", "chevron_left", "arrow_forward_ios",
-    "more_horiz", "drag_handle", "filter_list", "notifications_active", "block",
-    "swap_vert", "grid_view", "photo_size_select_large",
+    "bolt", "brightness_high", "bug_report", "cameraswitch", "check_circle", "chevron_right",
+    "cloud", "cloud_off", "content_copy", "contrast", "delete_sweep", "device_thermostat",
+    "download_for_offline", "error", "error_outline", "fiber_manual_record", "flip_camera_android", "folder",
+    "fullscreen", "gps_fixed", "gps_not_fixed", "gps_off", "hd", "help_outline",
+    "high_quality", "history", "location_searching", "lock", "lock_open", "map",
+    "mic", "mic_off", "more_horiz", "movie", "my_location", "near_me",
+    "nights_stay", "north", "notifications_active", "palette", "pause", "pin_drop",
+    "power_off", "privacy_tip", "report_problem", "restore", "schedule", "screen_lock_portrait",
+    "sd_card", "sensors", "speed", "stop", "storage", "thermostat",
+    "tune", "vibration", "video_library", "videocam", "videocam_off", "visibility_off",
+    "warning", "zoom_out_map",
 ]
-
 VECTOR = """<!--
   Standard Material Icon "{name}" from google/material-design-icons ({category}),
   licensed under the Apache License 2.0. Downloaded and converted verbatim by

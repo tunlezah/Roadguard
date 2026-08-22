@@ -70,8 +70,8 @@ private const val DISABLED_ALPHA = 0.38f
 @Composable
 fun SettingsSection(
     title: String,
-    subtitle: String? = null,
     modifier: Modifier = Modifier,
+    subtitle: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
@@ -109,12 +109,12 @@ fun SettingsSection(
 @Composable
 fun SettingsSwitchRow(
     title: String,
-    subtitle: String? = null,
     iconRes: Int,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
-    enabled: Boolean = true,
     modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    enabled: Boolean = true,
 ) {
     Row(
         modifier = modifier
@@ -147,12 +147,12 @@ fun SettingsSwitchRow(
 @Composable
 fun SettingsChoiceRow(
     title: String,
-    subtitle: String? = null,
     iconRes: Int,
     currentLabel: String,
     onClick: () -> Unit,
-    enabled: Boolean = true,
     modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    enabled: Boolean = true,
 ) {
     Row(
         modifier = modifier
@@ -289,8 +289,8 @@ fun SettingsSliderRow(
     range: ClosedFloatingPointRange<Float>,
     steps: Int,
     onValueChange: (Float) -> Unit,
-    enabled: Boolean = true,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     Column(
         modifier = modifier
@@ -332,8 +332,8 @@ fun SettingsSliderRow(
 fun SettingsInfoRow(
     title: String,
     value: String,
-    iconRes: Int? = null,
     modifier: Modifier = Modifier,
+    iconRes: Int? = null,
 ) {
     Row(
         modifier = modifier
@@ -416,10 +416,10 @@ fun SettingsNote(text: String, modifier: Modifier = Modifier) {
 @Composable
 fun SettingsNavigationRow(
     title: String,
-    subtitle: String? = null,
     iconRes: Int,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    subtitle: String? = null,
 ) {
     Row(
         modifier = modifier

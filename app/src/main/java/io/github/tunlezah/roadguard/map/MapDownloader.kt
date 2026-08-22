@@ -61,7 +61,7 @@ class MapDownloader(
 
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    throw IOException("HTTP ${response.code} for $url")
+                    throw MapHttpException(response.code, url)
                 }
                 // A 200 in reply to a Range request means the server ignored it, so anything we
                 // already have must be discarded rather than appended to.
@@ -143,6 +143,10 @@ class MapDownloader(
         }
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
+
+    /** A non-2xx response, carrying the status so the caller can distinguish 404 from 5xx. */
+    class MapHttpException(val statusCode: Int, url: String) :
+        IOException("HTTP $statusCode for $url")
 
     companion object {
         private const val TAG = "RoadguardMapDownload"

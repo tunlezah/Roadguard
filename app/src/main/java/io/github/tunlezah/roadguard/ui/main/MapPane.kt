@@ -149,6 +149,9 @@ fun MapPane(
                 iconRes = when (install.reason) {
                     MapFailureReason.NoNetwork -> R.drawable.ic_cloud_off
                     MapFailureReason.InsufficientStorage -> R.drawable.ic_storage
+                    MapFailureReason.NotPublished, MapFailureReason.NotConfigured ->
+                        R.drawable.ic_help_outline
+
                     else -> R.drawable.ic_error_outline
                 },
                 title = install.reason.message,
@@ -160,9 +163,17 @@ fun MapPane(
                     MapFailureReason.NotConfigured ->
                         "This build has no offline map package configured, so the map cannot be installed."
 
+                    MapFailureReason.NotPublished ->
+                        "Roadguard builds its own map data rather than downloading it from someone " +
+                            "else's server. Run the \"Build offline map\" workflow in this project " +
+                            "once and the map will install itself here. Recording is unaffected."
+
                     else -> install.detail ?: "You can try again at any time. Recording is unaffected."
                 },
-                actionLabel = if (install.reason == MapFailureReason.NotConfigured) null else "Try again",
+                actionLabel = when (install.reason) {
+                    MapFailureReason.NotConfigured, MapFailureReason.NotPublished -> null
+                    else -> "Try again"
+                },
                 onAction = onRetryInstall,
                 modifier = Modifier.fillMaxSize(),
             )

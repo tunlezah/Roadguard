@@ -5,7 +5,7 @@ The repository ships a single square source image (``icon.png``). This script de
 every launcher resource Android needs from it *without* redrawing or reinterpreting the
 artwork:
 
-* ``mipmap-anydpi-v26/ic_launcher.xml`` (+ round) reference an adaptive icon whose
+* ``mipmap-anydpi/ic_launcher.xml`` (+ round) reference an adaptive icon whose
   background is the artwork's own surround colour (solid black) and whose foreground is
   the artwork's badge, scaled so that it exactly fills the 72dp guaranteed-visible area
   of the 108dp adaptive canvas. Nothing is cropped by a rounded-square launcher mask, and

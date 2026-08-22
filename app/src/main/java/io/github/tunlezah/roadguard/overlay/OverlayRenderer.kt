@@ -8,6 +8,7 @@ import android.graphics.PorterDuff
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
+import androidx.core.graphics.withMatrix
 
 /**
  * Draws the burned-in overlay onto a camera frame's overlay canvas.
@@ -78,10 +79,11 @@ class OverlayRenderer {
         val displaySize = displaySize(cropRect, rotationDegrees)
         val matrix = buildDisplayMatrix(cropRect, rotationDegrees, mirrored)
 
-        canvas.save()
-        canvas.concat(matrix)
-        drawUpright(canvas, content, displaySize.first, displaySize.second)
-        canvas.restore()
+        // withMatrix restores the canvas even if drawing throws, which matters here: this runs on
+        // the GL thread and a leaked transform would corrupt every later frame.
+        canvas.withMatrix(matrix) {
+            drawUpright(this, content, displaySize.first, displaySize.second)
+        }
     }
 
     /** Lays the overlay out in upright display space. */

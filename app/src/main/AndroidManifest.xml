@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!--
       Runtime (dangerous) permissions. Roadguard asks for the minimum it needs, when it needs it:
@@ -30,6 +31,15 @@
          and (optionally) weather. Recording never waits for it. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!--
+      MapLibre's manifest contributes ACCESS_WIFI_STATE for its own connectivity detection.
+      Roadguard's map reads only local files and never contacts a tile server, so the permission
+      buys nothing and is removed from the merged manifest rather than being shipped unused.
+    -->
+    <uses-permission
+        android:name="android.permission.ACCESS_WIFI_STATE"
+        tools:node="remove" />
 
     <!-- Deliberately NOT requested:
            ACCESS_BACKGROUND_LOCATION            - a location-typed foreground service covers

@@ -59,6 +59,14 @@ sealed interface MapInstallState {
 
 enum class MapFailureReason(val message: String) {
     NoNetwork("Map installation needs an internet connection the first time"),
+
+    /**
+     * The catalogue names a package the server does not have.
+     *
+     * Distinguished from a generic download failure because it is not something the user can fix by
+     * retrying: the archive has not been published for this build yet.
+     */
+    NotPublished("The offline map package has not been published for this build yet"),
     InsufficientStorage("There is not enough free space to install the map"),
     DownloadFailed("The map download could not be completed"),
     VerificationFailed("The downloaded map data was incomplete or corrupt"),

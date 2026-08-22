@@ -31,7 +31,6 @@ startup = "1.2.0"
 concurrentFutures = "1.3.0"
 documentfile = "1.1.0"
 coroutines = "1.11.0"
-profileinstaller = "1.4.1"
 
 junit = "4.13.2"
 robolectric = "4.16.1"
@@ -56,7 +55,6 @@ androidx-lifecycle-process = { module = "androidx.lifecycle:lifecycle-process", 
 androidx-startup = { module = "androidx.startup:startup-runtime", version.ref = "startup" }
 androidx-concurrent-futures-ktx = { module = "androidx.concurrent:concurrent-futures-ktx", version.ref = "concurrentFutures" }
 androidx-documentfile = { module = "androidx.documentfile:documentfile", version.ref = "documentfile" }
-androidx-profileinstaller = { module = "androidx.profileinstaller:profileinstaller", version.ref = "profileinstaller" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-guava = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-guava", version.ref = "coroutines" }
 

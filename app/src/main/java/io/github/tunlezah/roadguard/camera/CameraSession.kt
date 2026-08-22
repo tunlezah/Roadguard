@@ -114,11 +114,12 @@ class CameraSession(private val context: Context) {
             .build()
             .also { it.setSurfaceProvider { request -> onSurfaceRequest(request) } }
 
+        // Deliberately no setRequiredFreeStorageBytes: that setter is library-restricted in
+        // CameraX 1.6, and Roadguard's own reserve (max(1 GiB, 4% of volume)) is far larger than
+        // anything it could set, so the Recorder's built-in 50 MiB floor is only ever the last
+        // line of defence behind the loop budget.
         val recorderBuilder = Recorder.Builder()
             .setQualitySelector(qualitySelectorFor(profile))
-            // Ask the recorder to reserve headroom so it aborts cleanly rather than filling the
-            // volume; Roadguard's own loop budget keeps far more free than this floor.
-            .setRequiredFreeStorageBytes(RECORDER_FREE_STORAGE_FLOOR_BYTES)
         if (profile.targetBitrateBps > 0) {
             recorderBuilder.setTargetVideoEncodingBitRate(profile.targetBitrateBps)
         }
@@ -150,7 +151,10 @@ class CameraSession(private val context: Context) {
         overlay = overlayEffect
         _cameraError.value = null
 
-        boundCamera.cameraInfo.addCameraStateListener(MAIN_EXECUTOR) { state ->
+        // cameraState is the public observable; addCameraStateListener is library-restricted.
+        // Observing on the service's own lifecycle also means the observer goes away with the
+        // service rather than outliving the binding.
+        boundCamera.cameraInfo.cameraState.observe(lifecycleOwner) { state ->
             _cameraError.value = state.error
             state.error?.let { Log.w(TAG, "camera state error ${it.code}", it.cause) }
         }
@@ -231,17 +235,6 @@ class CameraSession(private val context: Context) {
         private val MAIN_EXECUTOR = java.util.concurrent.Executor { command ->
             android.os.Handler(android.os.Looper.getMainLooper()).post(command)
         }
-
-        /**
-         * Free-space floor handed to `Recorder`.
-         *
-         * CameraX aborts a recording with `ERROR_INSUFFICIENT_STORAGE` below its own 50 MiB
-         * default; Roadguard raises that so the recorder gives up *before* the filesystem is
-         * in a state that damages other apps. Roadguard's own reserve is far larger again --
-         * this is only the last line of defence.
-         */
-        const val RECORDER_FREE_STORAGE_FLOOR_BYTES = 200L * 1024 * 1024
-
         /**
          * Builds the quality selector.
          *

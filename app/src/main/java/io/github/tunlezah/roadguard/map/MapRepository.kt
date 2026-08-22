@@ -157,11 +157,14 @@ class MapRepository(
 
         downloaded.onFailure { throwable ->
             Log.w(TAG, "map download failed", throwable)
-            _installState.value = MapInstallState.Failed(
-                chosen.id,
-                if (hasNetwork()) MapFailureReason.DownloadFailed else MapFailureReason.NoNetwork,
-                throwable.message,
-            )
+            val reason = when {
+                (throwable as? MapDownloader.MapHttpException)?.statusCode == 404 ->
+                    MapFailureReason.NotPublished
+
+                !hasNetwork() -> MapFailureReason.NoNetwork
+                else -> MapFailureReason.DownloadFailed
+            }
+            _installState.value = MapInstallState.Failed(chosen.id, reason, throwable.message)
             return
         }
 

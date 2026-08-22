@@ -115,10 +115,45 @@ android {
         warningsAsErrors = false
         abortOnError = true
         checkDependencies = false
-        disable += setOf("GradleDependency", "NewerVersionAvailable", "ObsoleteLintCustomCheck")
+        // LogNotTimber only makes sense in a project that uses Timber; Roadguard logs with
+        // android.util.Log deliberately, because a dashcam should not pull in a logging framework
+        // whose whole value is routing logs somewhere.
+        disable += setOf(
+            "GradleDependency",
+            "NewerVersionAvailable",
+            "ObsoleteLintCustomCheck",
+            "LogNotTimber",
+        )
         htmlReport = true
         xmlReport = true
         sarifReport = false
+
+        /*
+         * The baseline holds four categories, all reviewed, and nothing else. It exists so that a
+         * *new* lint error still fails the build rather than being lost in noise -- if you add to
+         * it, say why here.
+         *
+         *  UnsafeOptInUsageError (15)
+         *      Kotlin `@file:OptIn` declarations that Android lint cannot see through: the Camera2
+         *      interop needed to read a camera's hardware level and focal lengths, and media3's
+         *      Compose playback surface. Both opt-ins are explicit in the source, confined to one
+         *      file each, and explained there.
+         *
+         *  OldTargetApi (2)
+         *      targetSdk is deliberately 36 (Android 16) against compileSdk 37: Roadguard opts in to
+         *      Android 16 behaviour and compiles against 37 so newer APIs can be used behind version
+         *      checks, without inheriting API 37's behaviour changes untested.
+         *
+         *  IconLauncherShape (5)
+         *      The legacy per-density launcher PNGs fill their square because the supplied artwork
+         *      *is* a squircle badge on black. Every device Roadguard runs on (minSdk 34) uses the
+         *      adaptive icon instead, whose foreground is correctly inset into the 72dp safe area.
+         *
+         *  MonochromeLauncherIcon (2)
+         *      No monochrome layer is shipped. The artwork is photographic; an automatically derived
+         *      silhouette would misrepresent it and hand-drawing one would mean inventing competing
+         *      artwork. Themed icons therefore fall back to the full-colour adaptive icon.
+         */
         baseline = file("lint-baseline.xml")
     }
 }
@@ -134,7 +169,6 @@ dependencies {
     implementation(libs.androidx.startup)
     implementation(libs.androidx.concurrent.futures.ktx)
     implementation(libs.androidx.documentfile)
-    implementation(libs.androidx.profileinstaller)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.guava)
 

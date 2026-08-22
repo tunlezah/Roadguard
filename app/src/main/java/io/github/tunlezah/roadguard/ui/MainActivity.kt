@@ -5,7 +5,6 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.provider.Settings as AndroidSettings
 import android.view.WindowManager
@@ -128,14 +127,13 @@ class MainActivity : ComponentActivity() {
      * recording on, so a user who never wants audio is never asked for it.
      */
     private fun requestCorePermissions() {
-        val wanted = buildList {
-            add(Manifest.permission.CAMERA)
-            add(Manifest.permission.ACCESS_FINE_LOCATION)
-            add(Manifest.permission.ACCESS_COARSE_LOCATION)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                add(Manifest.permission.POST_NOTIFICATIONS)
-            }
-        }.filter { permission ->
+        val wanted = listOf(
+            Manifest.permission.CAMERA,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+            // minSdk 34: POST_NOTIFICATIONS is always a runtime permission here.
+            Manifest.permission.POST_NOTIFICATIONS,
+        ).filter { permission ->
             ContextCompat.checkSelfPermission(this, permission) !=
                 android.content.pm.PackageManager.PERMISSION_GRANTED
         }

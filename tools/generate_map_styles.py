@@ -51,6 +51,8 @@ DAY = {
     "forest": "#CFE0C3",
     "green": "#D8E8CD",
     "sand": "#EFE6CF",
+    "urban": "#E5E3E0",
+    "wetland": "#CFE0DE",
     "building": "#DCDFE3",
     "road_fill_major": "#FFFFFF",
     "road_fill_primary": "#FFF6D9",
@@ -77,6 +79,8 @@ NIGHT = {
     "forest": "#122019",
     "green": "#14231A",
     "sand": "#1E1D17",
+    "urban": "#171A1D",
+    "wetland": "#10201F",
     "building": "#1A2024",
     "road_fill_major": "#5C6A73",
     "road_fill_primary": "#4A555D",
@@ -163,10 +167,17 @@ def style(palette: dict[str, str]) -> dict:
                 "source-layer": "land",
                 "minzoom": 7,
                 "paint": {
+                    # The `kind` values are exactly those the Shortbread producer emits, so urban
+                    # land use reads as urban instead of falling through to a green default.
                     "fill-color": [
                         "match", ["get", "kind"],
                         ["forest", "wood"], palette["forest"],
-                        ["sand", "beach", "scree", "bare_rock"], palette["sand"],
+                        ["sand", "beach", "scree", "shingle", "bare_rock", "quarry"], palette["sand"],
+                        ["bog", "marsh", "string", "swamp", "wet_meadow", "fen"], palette["wetland"],
+                        [
+                            "residential", "commercial", "industrial", "retail", "garages",
+                            "railway", "brownfield", "greenfield", "landfill",
+                        ], palette["urban"],
                         palette["green"],
                     ],
                     "fill-opacity": 0.75,
@@ -244,7 +255,7 @@ def style(palette: dict[str, str]) -> dict:
                 "type": "line",
                 "source": SOURCE,
                 "source-layer": "ferries",
-                "minzoom": 8,
+                "minzoom": 10,
                 "paint": {
                     "line-color": palette["ferry"],
                     "line-width": 1.2,
