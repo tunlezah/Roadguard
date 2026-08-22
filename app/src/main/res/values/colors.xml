@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Matches the surround colour of the supplied Roadguard artwork. -->
+    <color name="ic_launcher_background">#FF000000</color>
+    <!-- Window background used before Compose draws, kept dark so the transition into the
+         (usually dark) driving UI does not flash white. -->
+    <color name="roadguard_window_background">#FF101216</color>
+</resources>

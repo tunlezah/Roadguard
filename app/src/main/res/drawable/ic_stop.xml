@@ -1,0 +1,14 @@
+<!--
+  Standard Material Icon "stop" from google/material-design-icons (av),
+  licensed under the Apache License 2.0. Downloaded and converted verbatim by
+  tools/fetch_material_icons.py. Do not hand-edit; re-run the script instead.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M6 6h12v12H6z" />
+</vector>
