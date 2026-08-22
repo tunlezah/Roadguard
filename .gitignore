@@ -24,3 +24,6 @@ keystore.properties
 
 # Generated diagnostics/benchmark output written by the developer tooling
 /benchmark-out/
+
+# Written by the CI dependency-audit step
+/deps.txt

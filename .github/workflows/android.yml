@@ -92,10 +92,13 @@ jobs:
             # 1. The APK must be a valid, signed, installable package.
             "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$apk" || fail=1
 
-            # 2. Its manifest must declare what Roadguard actually needs.
+            # 2. Its manifest must declare what Roadguard actually needs. Note the capital S in
+            #    minSdkVersion/targetSdkVersion: aapt2 emits it that way and these greps are
+            #    case-sensitive, so a lowercase pattern silently never matches.
             badging="$("$BUILD_TOOLS/aapt2" dump badging "$apk")"
             echo "$badging" | grep -E "^package: name='io.github.tunlezah.roadguard" || fail=1
-            echo "$badging" | grep -q "sdkVersion:'34'" || { echo "minSdk is not 34"; fail=1; }
+            echo "$badging" | grep -q "^minSdkVersion:'34'" || { echo "minSdk is not 34"; fail=1; }
+            echo "$badging" | grep -q "^targetSdkVersion:'36'" || { echo "targetSdk is not 36"; fail=1; }
             echo "$badging" | grep -q "application-label:'Roadguard'" || { echo "app label is not Roadguard"; fail=1; }
             for permission in \
               android.permission.CAMERA \
@@ -105,8 +108,27 @@ jobs:
                 || { echo "missing $permission"; fail=1; }
             done
 
-            # 3. Roadguard is offline-first and privacy-first: no cloud SDK may creep in.
-            "$BUILD_TOOLS/aapt2" dump badging "$apk" > /dev/null
+            # 3. Permissions Roadguard promises not to ship (docs/privacy.md). ACCESS_WIFI_STATE
+            #    is the interesting one: MapLibre's manifest contributes it and Roadguard removes
+            #    it with tools:node="remove", so this asserts that removal actually took effect in
+            #    the merged manifest rather than trusting it.
+            for forbidden in \
+              android.permission.ACCESS_BACKGROUND_LOCATION \
+              android.permission.ACCESS_WIFI_STATE \
+              android.permission.WRITE_EXTERNAL_STORAGE \
+              android.permission.READ_MEDIA_VIDEO \
+              android.permission.READ_MEDIA_IMAGES ; do
+              if echo "$badging" | grep -q "uses-permission: name='$forbidden'"; then
+                echo "::error::$apk declares $forbidden, which Roadguard must not ship"
+                fail=1
+              fi
+            done
+
+            # 4. ABIs, so a universal sideloadable APK cannot silently become single-arch.
+            for abi in arm64-v8a armeabi-v7a x86_64; do
+              echo "$badging" | grep -q "native-code:.*'$abi'" \
+                || { echo "missing native code for $abi"; fail=1; }
+            done
             echo "::endgroup::"
           done
           exit "$fail"

@@ -20,8 +20,18 @@ val keystoreProperties = Properties().apply {
     if (file.exists()) file.inputStream().use { load(it) }
 }
 
+/**
+ * A signing value, or null when it was not supplied.
+ *
+ * Blank is treated as absent, which is not pedantry: CI writes an empty string into
+ * `ROADGUARD_KEYSTORE_FILE` when no keystore secret is configured, and an empty string is
+ * non-null, so without `takeIf` the `file(...)` call below fails configuration outright with
+ * "Cannot convert '' to File" -- on exactly the unsigned path that is supposed to be the
+ * graceful fallback.
+ */
 fun signingValue(propertyKey: String, environmentKey: String): String? =
-    keystoreProperties.getProperty(propertyKey) ?: System.getenv(environmentKey)
+    (keystoreProperties.getProperty(propertyKey) ?: System.getenv(environmentKey))
+        ?.takeIf { it.isNotBlank() }
 
 val releaseKeystorePath = signingValue("storeFile", "ROADGUARD_KEYSTORE_FILE")
 val hasReleaseKeystore = releaseKeystorePath != null && file(releaseKeystorePath).exists()
