@@ -9,8 +9,9 @@ package io.github.tunlezah.roadguard.settings
  * tested against it directly. [SettingsRepository] is the only thing that knows how it is
  * persisted.
  *
- * Defaults follow the specification and the dashcam-industry conventions documented in
- * `docs/research/dashcam-feature-survey.md`:
+ * Every default below is either mandated by the product specification or a reasoned choice, and
+ * `docs/feature-research.md` records which is which for each one -- including the fact that no
+ * survey of commercial dashcams was carried out, so nothing here rests on one:
  *
  *  * recording quality and frame rate are **Auto** -- resolved at runtime from probed device
  *    capability, never from a hard-coded model name;

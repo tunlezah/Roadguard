@@ -70,7 +70,8 @@ compose-foundation = { module = "androidx.compose.foundation:foundation" }
 compose-material3 = { module = "androidx.compose.material3:material3" }
 # Only the *core* Material icon set: material-icons-extended adds several MB to the APK,
 # so the handful of symbols missing from the core set ship as hand-added Material Symbols
-# vector drawables in res/drawable (see docs/research/night-recording-and-ui.md).
+# vector drawables in res/drawable, fetched verbatim by tools/fetch_material_icons.py
+# (see docs/architecture.md section 13).
 compose-material-icons-core = { module = "androidx.compose.material:material-icons-core" }
 compose-material3-adaptive = { module = "androidx.compose.material3.adaptive:adaptive", version.ref = "adaptive" }
 androidx-window = { module = "androidx.window:window", version.ref = "window" }

@@ -35,8 +35,10 @@ import kotlin.math.sqrt
  * ### Honesty about the numbers
  *
  * Every threshold here is a documented starting point derived from published collision and
- * telematics figures (see `docs/research/event-detection.md`) and from the physics of the
- * discriminators, **not** from Roadguard measurements on a real vehicle. They are
+ * telematics figures and from the physics of the discriminators, **not** from Roadguard
+ * measurements on a real vehicle. The research note that would have collected those published
+ * figures in detail was never written (see `docs/research/README.md`), which is one more reason
+ * to treat these numbers as provisional. They are
  * deliberately gathered into [Tuning] so they can be replaced wholesale once real drive
  * traces exist, and `docs/event-detection.md` states plainly that this is not a certified
  * crash detector.
