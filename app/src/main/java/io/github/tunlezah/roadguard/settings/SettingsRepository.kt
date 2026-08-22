@@ -37,7 +37,6 @@ class SettingsRepository(private val context: Context) {
     private object Keys {
         val QUALITY = stringPreferencesKey("quality")
         val FRAME_RATE = stringPreferencesKey("frame_rate")
-        val CODEC = stringPreferencesKey("codec")
         val SEGMENT_LENGTH = stringPreferencesKey("segment_length")
         val CAMERA_FACING = stringPreferencesKey("camera_facing")
         val DUAL_CAMERA = booleanPreferencesKey("dual_camera")
@@ -95,7 +94,6 @@ class SettingsRepository(private val context: Context) {
         return Settings(
             quality = enumOr(this[Keys.QUALITY], defaults.quality),
             frameRate = enumOr(this[Keys.FRAME_RATE], defaults.frameRate),
-            codec = enumOr(this[Keys.CODEC], defaults.codec),
             segmentLength = enumOr(this[Keys.SEGMENT_LENGTH], defaults.segmentLength),
             cameraFacing = enumOr(this[Keys.CAMERA_FACING], defaults.cameraFacing),
             dualCameraEnabled = this[Keys.DUAL_CAMERA] ?: defaults.dualCameraEnabled,
@@ -142,7 +140,6 @@ class SettingsRepository(private val context: Context) {
     private fun Settings.writeTo(preferences: androidx.datastore.preferences.core.MutablePreferences) {
         preferences[Keys.QUALITY] = quality.name
         preferences[Keys.FRAME_RATE] = frameRate.name
-        preferences[Keys.CODEC] = codec.name
         preferences[Keys.SEGMENT_LENGTH] = segmentLength.name
         preferences[Keys.CAMERA_FACING] = cameraFacing.name
         preferences[Keys.DUAL_CAMERA] = dualCameraEnabled

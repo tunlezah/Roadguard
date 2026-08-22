@@ -1,0 +1,27 @@
+Offline map assets bundled with Roadguard
+=========================================
+
+Glyphs (app/src/main/assets/map/glyphs/**)
+------------------------------------------
+Rendered from the Noto Sans typeface. Noto fonts are licensed under the
+SIL Open Font License, Version 1.1 (https://scripts.sil.org/OFL).
+The glyph packaging tooling is from the VersaTiles project and is MIT licensed
+(https://github.com/versatiles-org/versatiles-fonts).
+
+Sprites (app/src/main/assets/map/sprites/**)
+--------------------------------------------
+Icon sprite sheets from the VersaTiles "basics" set, published under CC0 1.0
+with artwork derived from MIT-licensed icon sets.
+
+Map data
+--------
+The offline tile archive is built from OpenStreetMap data.
+(c) OpenStreetMap contributors, licensed under the Open Database License 1.0
+(https://www.openstreetmap.org/copyright).
+
+Vector tile schema
+------------------
+Shortbread 1.0 (https://shortbread-tiles.org/), documentation licensed CC0.
+
+Roadguard displays the OpenStreetMap attribution in the map pane and on the
+About screen, as the ODbL requires for a Produced Work.

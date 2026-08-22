@@ -12,8 +12,8 @@ package io.github.tunlezah.roadguard.settings
  * Defaults follow the specification and the dashcam-industry conventions documented in
  * `docs/research/dashcam-feature-survey.md`:
  *
- *  * recording quality/codec/frame rate are **Auto** -- resolved at runtime from probed
- *    device capability, never from a hard-coded model name;
+ *  * recording quality and frame rate are **Auto** -- resolved at runtime from probed device
+ *    capability, never from a hard-coded model name;
  *  * segments are **3 minutes**;
  *  * the loop budget is **5 GB**;
  *  * event protection keeps **30 s before** and **60 s after**;
@@ -25,7 +25,6 @@ data class Settings(
     // ── Recording ──────────────────────────────────────────────────────────────────
     val quality: QualitySetting = QualitySetting.Auto,
     val frameRate: FrameRateSetting = FrameRateSetting.Auto,
-    val codec: CodecSetting = CodecSetting.Auto,
     val segmentLength: SegmentLength = SegmentLength.Minutes3,
     val cameraFacing: CameraFacing = CameraFacing.Rear,
     val dualCameraEnabled: Boolean = false,
@@ -101,17 +100,22 @@ enum class QualitySetting(val label: String) {
     Uhd2160p("2160p (4K)"),
 }
 
+/*
+ * There is deliberately no codec setting.
+ *
+ * CameraX 1.6.x -- the stable release Roadguard records with -- gives an application no way to
+ * choose the video encoder: `Recorder` derives it from the device's own encoder profiles, and
+ * the only public API that would let an app override it, `Recorder.Builder.setVideoMimeType`,
+ * exists solely in the 1.7 alpha line behind an experimental opt-in. Roadguard will not put an
+ * alpha camera stack in the path of the one thing it must never get wrong, and it will not
+ * offer a setting it cannot honour. The codec actually in use is detected and shown on the
+ * Diagnostics screen instead. See docs/research/codecs-and-encoding.md and docs/architecture.md.
+ */
 enum class FrameRateSetting(val label: String, val fps: Int?) {
     Auto("Auto", null),
     Fps24("24 fps", 24),
     Fps30("30 fps", 30),
     Fps60("60 fps", 60),
-}
-
-enum class CodecSetting(val label: String) {
-    Auto("Auto"),
-    H264("H.264 / AVC"),
-    Hevc("H.265 / HEVC"),
 }
 
 enum class SegmentLength(val label: String, val seconds: Int) {

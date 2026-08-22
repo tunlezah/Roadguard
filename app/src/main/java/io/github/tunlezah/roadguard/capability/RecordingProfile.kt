@@ -1,6 +1,5 @@
 package io.github.tunlezah.roadguard.capability
 
-import io.github.tunlezah.roadguard.settings.CodecSetting
 import io.github.tunlezah.roadguard.settings.FrameRateSetting
 import io.github.tunlezah.roadguard.settings.QualitySetting
 import io.github.tunlezah.roadguard.settings.Settings
@@ -107,7 +106,7 @@ object RecordingProfileSelector {
             rationale += "Camera has not reported its supported qualities yet; using a conservative default"
         }
 
-        val codec = chooseCodec(capabilities, settings, rationale)
+        val codec = predictCodec(capabilities, rationale)
 
         // 1. Start from what the user asked for.
         val requestedRung = when (settings.quality) {
@@ -191,8 +190,7 @@ object RecordingProfileSelector {
             burnInOverlays = burnIn,
             tier = tier,
             isAuto = settings.quality == QualitySetting.Auto &&
-                settings.frameRate == FrameRateSetting.Auto &&
-                settings.codec == CodecSetting.Auto,
+                settings.frameRate == FrameRateSetting.Auto,
             rationale = rationale,
         )
     }
@@ -219,50 +217,36 @@ object RecordingProfileSelector {
     }
 
     /**
-     * Codec choice.
+     * Predicts the codec the recorder will produce.
      *
-     * Auto prefers **H.264** whenever a hardware H.264 encoder exists, even though HEVC files
-     * are smaller. The reasoning, recorded in `docs/research/codecs-and-encoding.md`: H.264
-     * has the broadest hardware-encoder and playback support, is the format every insurer,
-     * police force and desktop player can open without fuss, and on low-end silicon its
-     * encoder path is the best-tested one. Roadguard's job is evidence that plays back, not
-     * the smallest file. HEVC remains available as an explicit choice, and is used
-     * automatically only when no hardware H.264 encoder exists.
+     * Roadguard does not *choose* the codec. CameraX 1.6.x derives it from the device's own
+     * encoder profiles and exposes no override, so the honest thing to do is predict it for
+     * bitrate arithmetic and diagnostics, and report the real value once a file exists.
+     *
+     * The prediction is simply "the hardware encoder the device is most likely to use":
+     * hardware H.264 where present, because it is what `CamcorderProfile`-derived profiles
+     * overwhelmingly specify and what every player, insurer and police system can open;
+     * hardware HEVC when no hardware H.264 encoder is reported at all. Software encoders are
+     * never predicted, because Roadguard would not sustain continuous recording on one and
+     * says so rather than pretending otherwise.
      */
-    fun chooseCodec(
-        capabilities: DeviceCapabilities,
-        settings: Settings,
-        rationale: MutableList<String>,
-    ): String {
+    fun predictCodec(capabilities: DeviceCapabilities, rationale: MutableList<String>): String {
         val hardwareH264 = capabilities.hasHardwareEncoder(VideoMimeTypes.H264)
         val hardwareHevc = capabilities.hasHardwareEncoder(VideoMimeTypes.HEVC)
-
-        return when (settings.codec) {
-            CodecSetting.H264 -> {
-                if (!hardwareH264) rationale += "H.264 selected manually but no hardware encoder was found"
+        return when {
+            hardwareH264 -> {
+                rationale += "Expecting hardware H.264: widest playback compatibility for evidence footage"
                 VideoMimeTypes.H264
             }
 
-            CodecSetting.Hevc -> {
-                if (!hardwareHevc) rationale += "HEVC selected manually but no hardware encoder was found"
+            hardwareHevc -> {
+                rationale += "Expecting hardware HEVC: no hardware H.264 encoder was reported"
                 VideoMimeTypes.HEVC
             }
 
-            CodecSetting.Auto -> when {
-                hardwareH264 -> {
-                    rationale += "H.264 chosen: hardware encoder present, widest playback compatibility"
-                    VideoMimeTypes.H264
-                }
-
-                hardwareHevc -> {
-                    rationale += "HEVC chosen: no hardware H.264 encoder was reported"
-                    VideoMimeTypes.HEVC
-                }
-
-                else -> {
-                    rationale += "No hardware video encoder reported; falling back to H.264 and relying on CameraX"
-                    VideoMimeTypes.H264
-                }
+            else -> {
+                rationale += "No hardware video encoder was reported; the recorder's own choice will be shown in Diagnostics"
+                VideoMimeTypes.H264
             }
         }
     }

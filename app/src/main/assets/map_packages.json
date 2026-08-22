@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "Offline map packages Roadguard can install.",
+    "",
+    "The archive is a whole-of-Australia Shortbread 1.0 PMTiles built from OpenStreetMap data with",
+    "planetiler (see tools/build_australia_pmtiles.sh) and published as a release asset of this",
+    "repository. It is self-hosted deliberately: the OpenStreetMap data is ODbL and free to",
+    "redistribute, but the public extract servers (Geofabrik, BBBike, Protomaps, VersaTiles) either",
+    "discourage per-install traffic or are donation funded, so pointing an app's first-run download",
+    "at them would be abusive. Build once, host once, attribute properly.",
+    "",
+    "sizeBytes and sha256 are filled in by tools/build_australia_pmtiles.sh from the artifact it",
+    "actually produced; the app verifies the download against them."
+  ],
+  "packages": [
+    {
+      "id": "australia-shortbread",
+      "displayName": "Australia",
+      "description": "Whole-of-Australia offline road map. Installed once, then works with no SIM, no mobile data and no Wi-Fi.",
+      "downloadUrl": "https://github.com/tunlezah/Roadguard/releases/download/map-australia-v1/australia-shortbread.pmtiles",
+      "sizeBytes": null,
+      "sha256": "",
+      "attribution": "\u00a9 OpenStreetMap contributors",
+      "licence": "Open Database License 1.0 (ODbL)",
+      "coversWholeCountry": true
+    }
+  ]
+}
