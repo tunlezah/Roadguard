@@ -21,6 +21,7 @@ import io.github.tunlezah.roadguard.storage.StorageReconciler
 import io.github.tunlezah.roadguard.thermal.AndroidThermalSource
 import io.github.tunlezah.roadguard.thermal.SimulatedThermalSource
 import io.github.tunlezah.roadguard.thermal.ThermalSource
+import io.github.tunlezah.roadguard.weather.OpenMeteoWeatherSource
 import io.github.tunlezah.roadguard.weather.WeatherRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -104,8 +105,23 @@ class RoadguardContainer(private val appContext: Context) {
 
     val orientationTracker: CameraOrientationTracker by lazy { CameraOrientationTracker(appContext) }
 
+    /**
+     * Optional weather.
+     *
+     * Open-Meteo is the source because it is the only one that met every constraint: free, no API
+     * key, no registration, no account, and covering Australia. The Bureau of Meteorology, which the
+     * specification would have preferred, explicitly blocks automated access and directs
+     * programmatic users to a charged registered-user service -- see
+     * docs/research/weather-australia.md.
+     */
     val weatherRepository: WeatherRepository by lazy {
-        WeatherRepository(appContext, applicationScope, settings, locationEngine.state)
+        WeatherRepository(
+            context = appContext,
+            scope = applicationScope,
+            settings = settings,
+            location = locationEngine.state,
+            source = OpenMeteoWeatherSource(),
+        )
     }
 
     val mapRepository: MapRepository by lazy {
