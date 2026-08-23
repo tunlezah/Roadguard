@@ -15,7 +15,7 @@
 ./gradlew :app:testDebugUnitTest
 ```
 
-**386 tests. 0 failures. 0 errors. 0 skipped.** About 35 seconds of test execution on a warm
+**416 tests. 0 failures. 0 errors. 0 skipped.** About 35 seconds of test execution on a warm
 build.
 
 | Suite | Tests | What it holds in place |
@@ -34,6 +34,8 @@ build.
 | `DeviceTierScorerTest` | 16 | Every scoring combination, and both vetoes (`isLowRamDevice`, no hardware 1080p encoder) |
 | `VideoOverlayChromeUiTest` | 16 | **Compose UI.** The display-only guarantee (§5) in both the caption and the accessibility description, and blocker messaging with and without an action |
 | `SettingsRepositoryTest` | 12 | Round-tripping through DataStore, defaults, migration of absent keys |
+| `PreviewFitTransformTest` | 14 | The preview fit as the viewfinder applies it: absolute uniform scale, the Auto ceiling, centring in the non-overflowing axis, the road bias only where there *is* vertical overflow, and the landscape geometry that used to clip the top and band the bottom |
+| `LocationRequestsTest` | 16 | Shared ownership of the GNSS receiver: shortest interval wins, releasing one client leaves the others running, and thermal throttling of the recorder cannot slow the map down |
 | `OverlayLayoutTest` | 18 | The burned-in overlay never draws one label over another: every ladder resolution in both orientations, all 63 non-empty field combinations, two font metrics, hostile strings, and the arrangement/shrink fallbacks |
 | `PmtilesArchiveTest` | 18 | PMTiles v3 header parsing, and rejection of wrong-schema, raster, truncated, unsupported-version and too-coarse archives — each with a stated reason |
 | `MapAssetTest` | 12 | The shipped styles and map catalogue: the style/installer source-layer contract, asset-only glyphs and sprites, the layer budget, day/night structural parity, and every catalogue entry's size, zoom, URL and licence |
@@ -55,7 +57,7 @@ all answered by code that is exhaustively exercised on every push.
 
 ## 3. Compose UI tests that run on the JVM
 
-67 of the 386 are real Compose UI tests: they compose the production composables, read the
+67 of the 416 are real Compose UI tests: they compose the production composables, read the
 semantics tree, and perform clicks. They live in `src/test` under Robolectric rather than in
 `src/androidTest`, which is a deliberate trade:
 

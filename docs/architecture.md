@@ -157,6 +157,22 @@ a letterbox to discarding more than about a quarter of one dimension. When it do
 vertically it biases the visible window `ROAD_BIAS = 0.30f` down the hidden height, because a
 windscreen-mounted phone spends the top of its frame on sky.
 
+**The fit is applied through the viewfinder's own hooks, not over the top of it.**
+`PreviewFitTransform` implements both `ContentScale` and `Alignment` and is handed to
+`CameraXViewfinder`. This matters because it removes a whole class of bug: the preview used to
+derive the displayed source size from the *device* rotation and apply a `graphicsLayer` scale on
+top, but the device rotation is not the rotation the viewfinder applies — CameraX combines the
+target rotation with the camera's sensor mounting. The two were exactly inverted, which happened
+to cancel in portrait and produced, in landscape, an image pushed 12 px off the top of the panel
+with an 88 px black band along the bottom and about a quarter of the frame's width over-cropped.
+
+`androidx.camera.viewfinder` gives a `ContentScale` the **already rotation-corrected** source size
+— the chain, read out of the shipped `viewfinder-core` bytecode, is
+`rotatedViewportFor(transformationInfo, size)` → `setTransform(...)` →
+`contentScale.computeScaleFactor(rotatedSource, viewfinder)` → `alignment.align(...)`. So there is
+no rotation parameter in the preview path at all, and nothing left to get backwards. Asking beat
+deriving.
+
 The main screen shows the effective preview zoom and, when Auto is cropping, says so — so the
 user can see the difference between what they are watching and what is being written.
 
@@ -200,6 +216,18 @@ is evidence *about* the footage, not a replacement for the part of the frame it 
 
 The on-screen HUD is separate: plain Compose widgets over the viewfinder. Free, and immune to
 the preview/recording distinction.
+
+### Location follows the screen, not the recording
+
+`LocationEngine` is reference-counted by `LocationRequests`: the receiver runs while any of
+`Recorder`, `Ui` or `Setup` wants it, at the **shortest** interval any of them asked for, and stops
+when the last one lets go.
+
+It used to be owned by the recorder alone, so speed and the map's own position only appeared once
+you pressed record — which is not much use for deciding whether to press record. Sharing ownership
+also fixes the inverse hazard: the thermal engine throttling the recorder to one fix every five
+seconds must not freeze the map a driver is looking at, and now it cannot, because the UI's own
+one-second claim still stands.
 
 ## 7. Thermal management
 

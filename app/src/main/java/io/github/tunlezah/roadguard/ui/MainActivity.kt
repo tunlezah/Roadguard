@@ -18,6 +18,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import io.github.tunlezah.roadguard.location.LocationEngine
 import io.github.tunlezah.roadguard.core.RoadguardContainer
 import io.github.tunlezah.roadguard.recording.RecordingService
 import io.github.tunlezah.roadguard.settings.OrientationMode
@@ -86,6 +87,13 @@ class MainActivity : ComponentActivity() {
         container.weatherRepository.start()
         // The viewfinder is only worth producing frames for while the UI is on screen.
         container.recordingController.setPreviewEnabled(true)
+        // Location follows the *screen*, not the recording. A map and a speed readout that only
+        // work once you press record are not much use for deciding whether to press record.
+        if (container.settingsSnapshot().locationEnabled) {
+            container.locationEngine.request(LocationEngine.Client.Ui, UI_LOCATION_INTERVAL_MS)
+        } else {
+            container.locationEngine.release(LocationEngine.Client.Ui)
+        }
     }
 
     override fun onPause() {
@@ -96,6 +104,9 @@ class MainActivity : ComponentActivity() {
             container.recordingController.setPreviewEnabled(false)
         }
         container.weatherRepository.stop()
+        // Releasing only the UI's claim. If a recording is running it holds its own, so going to
+        // the home screen mid-drive does not interrupt the GNSS track.
+        container.locationEngine.release(LocationEngine.Client.Ui)
     }
 
     /** Applies the orientation and screen-on policy from settings. */
@@ -169,4 +180,16 @@ class MainActivity : ComponentActivity() {
             )
         }.onFailure { if (it !is ActivityNotFoundException) throw it }
     }
+
+    private companion object {
+        /**
+         * How often the UI wants a fix while it is on screen.
+         *
+         * One second: the map follows the vehicle and the speed chip is read at a glance, and this
+         * is not the interval that matters for power -- the recorder's own claim, which the thermal
+         * engine throttles, applies whenever a recording is running.
+         */
+        const val UI_LOCATION_INTERVAL_MS = 1_000L
+    }
+
 }

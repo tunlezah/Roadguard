@@ -76,8 +76,55 @@ class LocationEngine(
             Manifest.permission.ACCESS_COARSE_LOCATION,
         ) == PackageManager.PERMISSION_GRANTED
 
+    /**
+     * Who currently wants location updates.
+     *
+     * The receiver used to be owned by the recorder alone, so speed and the map's own position
+     * only appeared while recording -- which is not what a driver expects from a screen that is
+     * showing them a map. Ownership is now shared: the engine runs while *any* client wants it, at
+     * the shortest interval any of them asked for, and stops when the last one lets go. That keeps
+     * "the map works as soon as you open the app" and "the thermal engine can slow the recorder's
+     * updates down" from being in conflict.
+     */
+    enum class Client {
+        /** The recorder, while a recording is running. Interval set by the thermal plan. */
+        Recorder,
+
+        /** The visible UI, so the map can centre and the speed chip can read before recording. */
+        Ui,
+
+        /** First-run setup, which shows fix acquisition as a setup step. */
+        Setup,
+    }
+
+    private val requests = LocationRequests()
+
+    /**
+     * Asks for updates on [client]'s behalf, or changes the interval it wants.
+     *
+     * Idempotent, and safe to call from either the main thread or the recorder's scope.
+     */
+    fun request(client: Client, intervalMs: Long = DEFAULT_INTERVAL_MS) {
+        val effective = synchronized(requests) { requests.request(client, intervalMs) }
+        applyEffectiveInterval(effective)
+    }
+
+    /** Releases [client]'s claim. Updates stop once nobody wants them. */
+    fun release(client: Client) {
+        val effective = synchronized(requests) { requests.release(client) }
+        if (effective == null) stopUpdates() else applyEffectiveInterval(effective)
+    }
+
+    /** True when at least one client wants updates. Exposed for diagnostics. */
+    val isActive: Boolean get() = synchronized(requests) { requests.isActive }
+
+    private fun applyEffectiveInterval(intervalMs: Long) {
+        if (requesting && intervalMs == currentIntervalMs) return
+        startUpdates(intervalMs)
+    }
+
     @SuppressLint("MissingPermission")
-    fun start(intervalMs: Long = DEFAULT_INTERVAL_MS) {
+    private fun startUpdates(intervalMs: Long = DEFAULT_INTERVAL_MS) {
         val manager = locationManager ?: return
         if (!hasPermission()) {
             _state.value = _state.value.copy(permissionGranted = false, quality = FixQuality.NoSignal)
@@ -112,8 +159,9 @@ class LocationEngine(
         }.onFailure { Log.w(TAG, "could not request location updates", it) }
     }
 
-    fun stop() {
+    private fun stopUpdates() {
         val manager = locationManager ?: return
+        currentIntervalMs = DEFAULT_INTERVAL_MS
         if (!requesting) return
         runCatching { manager.removeUpdates(listener) }
         runCatching { manager.unregisterGnssStatusCallback(gnssCallback) }
@@ -121,10 +169,16 @@ class LocationEngine(
         speedFilter.reset()
     }
 
-    /** Changes the update rate without dropping the current fix. Used by the thermal engine. */
-    fun setInterval(intervalMs: Long) {
-        if (!requesting || intervalMs == currentIntervalMs) return
-        start(intervalMs)
+    /**
+     * Changes the rate [Client.Recorder] asks for, without dropping the current fix.
+     *
+     * Used by the thermal engine. It cannot slow the receiver below what another client wants,
+     * which is deliberate: throttling the recorder's own updates must not blank the map the user
+     * is looking at.
+     */
+    fun setRecorderInterval(intervalMs: Long) {
+        val wanted = synchronized(requests) { requests.retune(Client.Recorder, intervalMs) } ?: return
+        applyEffectiveInterval(wanted)
     }
 
     /** Refreshes staleness and expires a held speed, without waiting for a new fix. */

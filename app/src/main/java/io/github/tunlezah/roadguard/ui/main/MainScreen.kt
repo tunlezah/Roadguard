@@ -65,7 +65,6 @@ import io.github.tunlezah.roadguard.ui.rememberRoadguardWindowInfo
 fun MainScreen(
     state: MainUiState,
     surfaceRequest: androidx.camera.core.SurfaceRequest?,
-    previewRotationDegrees: Int,
     onProtect: () -> Unit,
     onToggleMap: (Boolean) -> Unit,
     onToggleMicrophone: (Boolean) -> Unit,
@@ -121,7 +120,6 @@ fun MainScreen(
                     VideoPane(
                         surfaceRequest = surfaceRequest,
                         previewZoom = state.settings.previewZoom,
-                        rotationDegrees = previewRotationDegrees,
                         modifier = paneModifier,
                         onFitComputed = { previewFit = it },
                     ) {
