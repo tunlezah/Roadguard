@@ -347,7 +347,7 @@ class RecordingController(
 
     private fun startPeripherals(settings: Settings) {
         if (settings.locationEnabled) {
-            locationEngine.start(_thermalPlan.value.locationIntervalMs)
+            locationEngine.request(LocationEngine.Client.Recorder, _thermalPlan.value.locationIntervalMs)
         }
         if (settings.eventDetectionEnabled) {
             sensorSource.start()
@@ -377,7 +377,7 @@ class RecordingController(
         // lost from the closing segment.
         sensorJob?.cancel()
         overlayJob?.cancel()
-        locationEngine.stop()
+        locationEngine.release(LocationEngine.Client.Recorder)
         sensorSource.stop()
         withContext(Dispatchers.Main) { cameraSession.unbind() }
         overlayEffect?.close()
@@ -690,8 +690,11 @@ class RecordingController(
             )
         }
         if (settings.locationEnabled != previous.locationEnabled) {
-            if (settings.locationEnabled) locationEngine.start(_thermalPlan.value.locationIntervalMs)
-            else locationEngine.stop()
+            if (settings.locationEnabled) {
+                locationEngine.request(LocationEngine.Client.Recorder, _thermalPlan.value.locationIntervalMs)
+            } else {
+                locationEngine.release(LocationEngine.Client.Recorder)
+            }
         }
         if (settings.recordingZoom != previous.recordingZoom) {
             cameraSession.setRecordingZoom(settings.recordingZoom)
@@ -705,7 +708,7 @@ class RecordingController(
         if (plan == _thermalPlan.value) return
         _thermalPlan.value = plan
         update { it.copy(thermalLevel = level) }
-        locationEngine.setInterval(plan.locationIntervalMs)
+        locationEngine.setRecorderInterval(plan.locationIntervalMs)
         scope.launch { requeueProfileIfNeeded() }
     }
 

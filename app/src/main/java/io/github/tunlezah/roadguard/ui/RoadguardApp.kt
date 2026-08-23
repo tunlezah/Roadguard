@@ -87,13 +87,9 @@ fun RoadguardApp(
                 val viewModel: MainViewModel = viewModel(factory = MainViewModel.Factory)
                 val state by viewModel.state.collectAsState()
                 val surfaceRequest by viewModel.surfaceRequest.collectAsState()
-                val rotation by container.recordingController.surfaceRotation.collectAsState()
-
                 MainScreen(
                     state = state,
                     surfaceRequest = surfaceRequest,
-                    previewRotationDegrees = io.github.tunlezah.roadguard.camera
-                        .CameraOrientationTracker.degreesFor(rotation),
                     onProtect = viewModel::protectNow,
                     onToggleMap = { viewModel.setMapVisible(it) },
                     onToggleMicrophone = { enabled ->

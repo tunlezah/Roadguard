@@ -65,10 +65,33 @@ object PreviewFit {
         panelWidth: Int,
         panelHeight: Int,
         requested: PreviewZoom,
+    ): PreviewFitResult = compute(
+        sourceWidth = sourceWidth.toFloat(),
+        sourceHeight = sourceHeight.toFloat(),
+        panelWidth = panelWidth.toFloat(),
+        panelHeight = panelHeight.toFloat(),
+        requested = requested,
+    )
+
+    /**
+     * The same computation over float sizes.
+     *
+     * This is the form the viewfinder itself supplies: `ContentScale.computeScaleFactor` is handed
+     * the **rotation-corrected** source size and the panel size as floats, which is why
+     * [io.github.tunlezah.roadguard.camera.PreviewFitTransform] uses this overload and why nothing
+     * in the preview path needs to know the device's rotation at all.
+     */
+    fun compute(
+        sourceWidth: Float,
+        sourceHeight: Float,
+        panelWidth: Float,
+        panelHeight: Float,
+        requested: PreviewZoom,
     ): PreviewFitResult {
-        if (sourceWidth <= 0 || sourceHeight <= 0 || panelWidth <= 0 || panelHeight <= 0) {
+        if (sourceWidth <= 0f || sourceHeight <= 0f || panelWidth <= 0f || panelHeight <= 0f) {
             return PreviewFitResult(
                 scale = 1f,
+                fitScale = 1f,
                 verticalBias = 0f,
                 horizontalBias = 0f,
                 zoomToFill = 1f,
@@ -80,12 +103,12 @@ object PreviewFit {
         }
 
         val fitScale = min(
-            panelWidth.toFloat() / sourceWidth,
-            panelHeight.toFloat() / sourceHeight,
+            panelWidth / sourceWidth,
+            panelHeight / sourceHeight,
         )
         val fillScale = max(
-            panelWidth.toFloat() / sourceWidth,
-            panelHeight.toFloat() / sourceHeight,
+            panelWidth / sourceWidth,
+            panelHeight / sourceHeight,
         )
         // Zoom, relative to a letterboxed "fit", at which the panel is exactly filled.
         val zoomToFill = if (fitScale > 0f) fillScale / fitScale else 1f
@@ -106,8 +129,8 @@ object PreviewFit {
             if (drawnHeight > 0f) overflowY / drawnHeight else 0f,
         )
         val letterboxedFraction = max(
-            if (panelWidth > 0) (panelWidth - drawnWidth).coerceAtLeast(0f) / panelWidth else 0f,
-            if (panelHeight > 0) (panelHeight - drawnHeight).coerceAtLeast(0f) / panelHeight else 0f,
+            if (panelWidth > 0f) (panelWidth - drawnWidth).coerceAtLeast(0f) / panelWidth else 0f,
+            if (panelHeight > 0f) (panelHeight - drawnHeight).coerceAtLeast(0f) / panelHeight else 0f,
         )
 
         // Only bias when there is a meaningful vertical crop to spend; horizontal crops stay
@@ -120,6 +143,7 @@ object PreviewFit {
 
         return PreviewFitResult(
             scale = zoom,
+            fitScale = fitScale,
             verticalBias = verticalBias,
             horizontalBias = 0f,
             zoomToFill = zoomToFill,
@@ -155,6 +179,11 @@ object PreviewFit {
  */
 data class PreviewFitResult(
     val scale: Float,
+    /**
+     * The absolute source-to-panel scale of a plain letterboxed fit, before [scale] is applied.
+     * `fitScale * scale` is the total magnification, which is what a `ContentScale` must return.
+     */
+    val fitScale: Float,
     val verticalBias: Float,
     val horizontalBias: Float,
     val zoomToFill: Float,
@@ -165,6 +194,9 @@ data class PreviewFitResult(
 ) {
     /** True when the panel is fully covered by camera image. */
     val fillsPanel: Boolean get() = letterboxedFraction <= 0.001f
+
+    /** Absolute source-to-panel magnification: the letterboxed fit, times the zoom over it. */
+    val totalScale: Float get() = fitScale * scale
 
     /** Short human-readable summary for the preview-zoom control. */
     fun describe(): String = buildString {

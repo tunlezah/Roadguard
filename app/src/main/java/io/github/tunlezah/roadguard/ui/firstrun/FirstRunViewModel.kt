@@ -9,6 +9,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import io.github.tunlezah.roadguard.core.RoadguardContainer
+import io.github.tunlezah.roadguard.location.LocationEngine
 import io.github.tunlezah.roadguard.location.LocationState
 import io.github.tunlezah.roadguard.map.MapInstallState
 import io.github.tunlezah.roadguard.map.MapPackage
@@ -140,7 +141,7 @@ class FirstRunViewModel(application: Application) : AndroidViewModel(application
         ) {
             return
         }
-        container.locationEngine.start()
+        container.locationEngine.request(LocationEngine.Client.Setup)
     }
 
     /**
