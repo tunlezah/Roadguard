@@ -90,6 +90,17 @@ class MapStyleProvider(private val context: Context) {
 
         /** The GeoJSON source in the bundled styles that carries the vehicle marker. */
         const val VEHICLE_SOURCE_ID = "vehicle"
+
+        /**
+         * Every `source-layer` the bundled styles draw from the tile archive.
+         *
+         * Held as a constant so [MapInstaller] can reject an archive in the wrong schema without
+         * parsing the style, and kept honest by `MapStyleAssetTest`, which reads the shipped style
+         * JSON and fails the build if the two ever diverge.
+         */
+        val REQUIRED_SOURCE_LAYERS: Set<String> = setOf(
+            "boundaries", "buildings", "earth", "landcover", "landuse", "places", "roads", "water",
+        )
     }
 }
 

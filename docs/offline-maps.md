@@ -16,9 +16,10 @@ lines). This document is the shipped design.
 | --- | --- |
 | Renderer | **MapLibre Native** — `org.maplibre.gl:android-sdk-opengl:13.5.1` |
 | Tile container | **PMTiles v3**, a single file, read directly |
-| Tile schema | **Shortbread 1.0** |
-| Tile builder | **planetiler** (`tools/build_australia_pmtiles.sh`) |
-| Data | OpenStreetMap, via a Geofabrik area extract |
+| Tile schema | **Protomaps Basemap** (9 vector layers) |
+| Data | OpenStreetMap, built with planetiler |
+| Source | release assets of `github.com/tunlezah/DashCam`, tag `map-data-v1` |
+| Coverage | whole of Australia (zoom 12), or any single state/territory (zoom 14) |
 | Glyphs and sprites | **bundled in the APK** as assets |
 | Style | **bundled in the APK**, day and night, 18 layers each |
 
@@ -61,10 +62,10 @@ Published vector styles run to 200–324 layers. Roadguard's day and night style
 each**:
 
 ```
-background  ocean  land  water  water-lines  buildings
-streets-casing  streets  rail  ferries
-boundary-state  boundary-country
-street-labels  place-labels-major  place-labels-minor  boundary-labels
+background  earth  landcover  landuse  water  water-lines  buildings
+roads-casing  roads  rail  ferries
+boundary-region  boundary-country
+road-labels  place-labels-major  place-labels-minor
 vehicle-halo  vehicle-dot
 ```
 
@@ -73,10 +74,33 @@ shader core. Every style layer is at least one draw call per tile per frame, and
 style on an MP1 GPU is a slideshow that also competes with the video encoder for memory
 bandwidth, which is a recording-reliability problem, not just a smoothness problem.
 
-The whole road network collapses into **two** layers (`streets-casing` and `streets`) using a
-`match` expression on Shortbread's `kind` attribute. This is safe because **Shortbread
-guarantees z-order within a tile**: features arrive in the order they should be drawn, so
-motorways do not need their own layer to sit above residential streets.
+The whole road network collapses into **two** layers (`roads-casing` and `roads`) using a `match`
+expression on the schema's `kind` attribute, so width and colour select the hierarchy without a
+layer per class.
+
+Two details of this schema shape the style, and both were found by **decoding real tiles from the
+published archives**, not by reading a spec:
+
+* **`rail` and `ferry` are `kind` values inside the `roads` layer**, not layers of their own. They
+  are filtered out of the two road layers and drawn separately.
+* **`earth` is the landmass polygon and `water` carries the ocean.** So the background is painted
+  water-colour, `earth` paints land over it, and `water` paints coastline and lakes back over that.
+  A missing tile therefore reads as sea rather than as a hole.
+
+The `kind` values the style filters on, counted from a Sydney CBD tile at zoom 14:
+
+| Layer | Values present |
+| --- | --- |
+| `roads` | `path` 281, `minor_road` 161, `major_road` 52, `highway` 37, `rail` 30, `ferry` 20, `other` 15 |
+| `water` | `water`, `river`, `lake`, `bay`, `stream`, `ocean` |
+| `earth` | `earth`, `cliff` |
+| `landuse` | `park`, `residential`, `commercial`, `industrial`, `grass`, `wood`, `scrub`, … (24 kinds) |
+| `places` | `city`, `suburb`, `locality`, `neighbourhood`, `region` |
+| `boundaries` | `country`, `region`, `county` |
+
+`medium_road` is filtered for too. It appears in the schema but in none of the tiles sampled, and
+including a kind that is absent costs nothing while omitting one that appears would silently drop
+roads.
 
 `tools/generate_map_styles.py` generates both styles from one description, so day and night
 cannot drift apart.
@@ -91,7 +115,9 @@ first run ─► catalogue (assets/map_packages.json)
                 ├─ download to <name>.part  ── resumable, progress, pause, cancel
                 │       └─ SHA-256 verified when the catalogue publishes one
                 │
-                ├─ structural verify: plausible size, published size, magic bytes
+                ├─ structural verify: plausible size, published size, magic bytes,
+                │       PMTiles v3 header, vector tile type, usable zoom range, and
+                │       every source-layer the bundled style draws
                 │
                 ├─ install: rename into a fresh directory
                 │
@@ -108,8 +134,14 @@ Properties that follow from that order:
   verification on the next start for a reason the user could not act on.
 * **The storage budget is checked first**, using the same reserve the recorder respects. A map
   download can never eat the recording headroom.
-* Progress reporting is throttled to whole percents and a minimum interval, so a 1.1 GB download
+* Progress reporting is throttled to whole percents and a minimum interval, so a 250 MB download
   does not spend its time emitting state.
+* **A wrong-schema archive is rejected here, not discovered on a drive.** `PmtilesArchive` reads
+  the container header and the embedded `vector_layers` list and requires every source-layer the
+  style draws (`MapStyleProvider.REQUIRED_SOURCE_LAYERS`) to be present. Without that check a
+  valid archive in another schema would install cleanly and render a blank map — the one failure
+  mode that looks like an app bug and stays invisible until someone drives somewhere. The failure
+  detail names the missing layers.
 
 ### Failure reasons are distinguished
 
@@ -118,15 +150,15 @@ Because "it didn't work" is not actionable:
 | Reason | Message |
 | --- | --- |
 | `NoNetwork` | Map installation needs an internet connection the first time |
-| `NotPublished` | The offline map package has not been published for this build yet |
+| `NotPublished` | That region's map file is not available at the moment |
 | `InsufficientStorage` | There is not enough free space to install the map |
 | `DownloadFailed` | The map download could not be completed |
 | `VerificationFailed` | The downloaded map data was incomplete or corrupt |
 | `NotConfigured` | No offline map package is configured for this build |
 | `Cancelled` | Map installation was cancelled |
 
-`NotPublished` exists separately from `DownloadFailed` because it is not something the user can
-fix by retrying.
+`NotPublished` exists separately from `DownloadFailed` because retrying the *same* region will not
+help — but choosing a different one may.
 
 ### Corruption recovery
 
@@ -149,60 +181,73 @@ is torn down and replaced with a placeholder). Plus `MapView.setMaximumFps()` un
 The map is always subordinate to recording, and there is no code path by which the map can stop
 or degrade the recorder.
 
-## 5. Building the archive
+## 5. Where the archives come from
 
-`tools/build_australia_pmtiles.sh` runs planetiler against a Geofabrik area extract and emits
-`australia-shortbread.pmtiles` plus a `.sha256`.
+The app downloads PMTiles archives published as release assets of
+`github.com/tunlezah/DashCam`, tag `map-data-v1`. Eight packages are offered:
 
-**Built and verified in this work:**
+| Package | Size | Max zoom | Detail |
+| --- | --- | --- | --- |
+| All of Australia *(default)* | 231 MiB | 12 | highways and main roads, not every suburban street |
+| New South Wales and ACT | 348 MiB | 14 | street level |
+| Queensland | 250 MiB | 14 | street level |
+| Victoria | 228 MiB | 14 | street level |
+| Western Australia | 176 MiB | 14 | street level |
+| South Australia | 94 MiB | 14 | street level |
+| Tasmania | 55 MiB | 14 | street level |
+| Northern Territory | 45 MiB | 14 | street level |
 
-| Property | Value |
-| --- | --- |
-| Size | 1,133,229,927 bytes (1.06 GiB) |
-| SHA-256 | `e5f65fad26e753c62ea13fda37b4ae90e5b79af52e1c841e30deb80194b0dfd8` |
-| `pmtiles verify` | clean |
-| Format | PMTiles v3, `mvt`, zoom 0–14, clustered |
+Every size in that table is the HTTP `content-length` of the actual asset, and every zoom range was
+read from the archive's own PMTiles v3 header — not from a build log.
 
-Zoom 14 is the Shortbread maximum and is ample for driving: MapLibre over-zooms vector tiles
-without visible loss, so z14 data renders cleanly at z17+.
+### Why whole-of-Australia is the default
 
-### Why Roadguard self-hosts
+Because it means a user who makes no decision at all still gets a working map, and because a driver
+crossing a state border does not watch it blank out. The cost is honest and stated on screen: zoom
+12 shows the road network but not every suburban street, so anyone who mostly drives in one state is
+better off picking that state. The picker appears during first-run setup and again on the Storage
+screen, and each row says both the size and whether it carries street-level detail.
 
-The OpenStreetMap data is ODbL and free to redistribute. The problem is not licensing, it is
-bandwidth: Geofabrik, BBBike, Protomaps and VersaTiles are either donation funded or explicitly
-discourage per-install traffic (Protomaps discourages hotlinking outright; Mapsforge's server is
-labelled "not suitable for mass downloads"). Pointing an app's first-run download at any of them
-would make somebody else's server pay for Roadguard's installs.
+Switching region **replaces** the installed archive rather than accumulating a second one. That is a
+deliberate choice on a phone where hundreds of megabytes matter, and the Storage screen says so.
 
-So: build once, host once, attribute properly. `© OpenStreetMap contributors`, ODbL 1.0, shown
-on the map and on the About screen.
+### Why not self-host
 
-### Publishing it
+Roadguard originally built its own whole-of-Australia archive, because no source appeared to exist
+that could be downloaded per-install without freeloading on someone else's donation-funded server.
+That reasoning still holds for third-party tile servers — Protomaps discourages hotlinking outright,
+and Mapsforge's server is labelled "not suitable for mass downloads" — but it does not apply to
+assets published by the same owner as this app, which is what these are.
 
-`.github/workflows/build-offline-map.yml` (manual `workflow_dispatch`) builds the archive, runs
-`pmtiles verify` and `pmtiles show`, **checks that every `source-layer` the style references
-actually exists in the archive's metadata**, creates or updates the release, uploads the asset
-and its checksum, and commits the real size and SHA-256 back into
-`app/src/main/assets/map_packages.json`.
+The self-hosting path is therefore no longer on the critical path, and
+`.github/workflows/build-offline-map.yml` is **not currently usable**: it builds Shortbread 1.0
+tiles, and the styles now target Protomaps Basemap. Its own schema-compatibility gate will fail if
+it is run, which is the correct outcome — it stops the workflow publishing an archive the app would
+reject at install time. Making it useful again means pointing it at a Protomaps-basemap build, or
+regenerating the styles for Shortbread. The file carries the same warning at the top.
 
-That last step is why the catalogue currently ships with `sizeBytes: null` and `sha256: ""`: the
-app skips checksum verification when the catalogue publishes none (structural verification still
-runs), and the workflow fills both in from the artifact it actually produced. Hard-coding the
-local build's checksum would be wrong — a later planetiler run against fresher OSM data produces
-a different, equally valid archive, and the app would reject it.
+For the record, the archive that path produced and verified earlier was 1,133,229,927 bytes,
+sha256 `e5f65fad26e753c62ea13fda37b4ae90e5b79af52e1c841e30deb80194b0dfd8`, PMTiles v3, mvt, z0–14,
+clustered, `pmtiles verify` clean.
 
-> **The release asset has not been published.** This environment has no way to create a GitHub
-> release or upload an asset — the available GitHub tools do not include release creation, and
-> direct API access is not available. The workflow is complete and ready; someone with repository
-> access needs to run **Actions → Build offline map → Run workflow** once. Until then the app
-> reports `NotPublished` and everything except the map works normally.
+### Why no checksum is pinned
+
+The catalogue ships `sha256: ""` for every package, deliberately. The assets are rebuilt in place by
+their own workflow, so a pinned hash would eventually make Roadguard reject a perfectly good map —
+a self-inflicted outage with no upside.
+
+Verification is structural instead, and it is *stronger* for the failure that actually matters. See
+§3: a checksum answers "are these the bytes I expected"; it cannot answer "will the style draw
+anything from this file". A complete, valid archive in the wrong schema renders a blank map with
+every layer silently matching nothing, and that is the case `PmtilesArchive` rejects at install
+time — naming the missing layers in the failure detail.
 
 ## 6. Attribution and licensing
 
 | Component | Licence |
 | --- | --- |
 | Map data | © OpenStreetMap contributors, **ODbL 1.0** |
-| Shortbread schema | CC0 |
+| Protomaps Basemap schema | BSD-3-Clause |
 | Noto Sans glyphs | SIL Open Font License 1.1 |
 | Sprite set | as recorded in `app/src/main/assets/map/LICENCES.txt` |
 | MapLibre Native | BSD-2-Clause |
@@ -215,9 +260,12 @@ licence condition, not a courtesy.
 | Claim | Status |
 | --- | --- |
 | `libmaplibre.so` contains a PMTiles source and accepts `pmtiles://file://…` | **Verified** by `strings` on the shipped native library |
-| The archive builds, verifies and is a valid PMTiles v3 file | **Verified** — built here; `pmtiles verify` clean |
-| Every `source-layer` the style uses exists in the archive | **Verified** by the workflow step; also checked against the locally built archive |
-| Styles are valid JSON with 18 layers, asset-relative glyphs and sprites | **Verified** by inspection and by the generator |
+| All eight published assets exist and are downloadable | **Verified** — HTTP 200 with a `content-length` for each; the sizes in §5 are those values |
+| All eight are PMTiles v3, `mvt`, clustered, with the zoom ranges in §5 | **Verified** by parsing each archive's header over HTTP range requests |
+| Every `source-layer` the styles draw exists in **every** one of the eight archives | **Verified** — checked against all eight; this is the check that would otherwise be a blank map |
+| The `kind` values the style filters on are really present | **Verified** by decoding MVT tiles from the archives (Sydney z14, Wagga z13, Dubbo z12, Albury z6) and counting features per value |
+| Styles are valid JSON with 18 layers, asset-relative glyphs and sprites, and the source-layer set the installer enforces | **Verified** — `MapAssetTest`, 12 JVM tests, reading the shipped assets |
+| A wrong-schema, raster, truncated, or too-coarse archive is rejected with a stated reason | **Verified** — `PmtilesArchiveTest`, 18 JVM tests |
 | The style renders acceptably on a Mali-G57 MP1 | **Not verified.** No device was available. The 18-layer budget is reasoning about draw calls, not a measured frame rate |
-| Install/resume/cancel/corruption paths behave as described | **Implemented and reviewed; not covered by an automated test.** These need a real filesystem and network — an instrumentation test, see `docs/testing.md` |
-| Download of the published asset works end to end | **Not verified.** The asset has not been published — see §5 |
+| Install/resume/cancel/corruption paths behave as described | **Implemented and reviewed; the verification step is now unit tested, the rest is not.** The download and install paths need a real filesystem and network — an instrumentation test, see `docs/testing.md` |
+| The map renders on a phone after a real download | **Not verified.** No device was available. The archives, the schema match and the style are all verified independently; nothing has drawn a pixel |

@@ -27,3 +27,6 @@ keystore.properties
 
 # Written by the CI dependency-audit step
 /deps.txt
+
+# Kotlin compiler session scratch
+/.kotlin/

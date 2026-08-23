@@ -6,8 +6,13 @@ package io.github.tunlezah.roadguard.map
  * @param id stable identifier, used as the on-disk directory name.
  * @param sizeBytes the download size **as published by the source**, or null when the source does
  *   not state it. Roadguard shows "size unknown" rather than an estimate it made up.
- * @param sha256 published checksum, when the source publishes one. Absent for most OpenStreetMap
- *   extract mirrors, in which case [MapInstaller] verifies structurally instead.
+ * @param sha256 published checksum, when the source publishes one. Usually absent -- the archives
+ *   are rebuilt by their own workflow, so a pinned hash would eventually reject a good map --
+ *   in which case [MapInstaller] verifies structurally instead, which also catches the failure a
+ *   checksum cannot: a valid archive in the wrong schema. See [PmtilesArchive].
+ * @param maxZoom the archive's deepest zoom level, or null when the catalogue does not state it.
+ *   This is the honest measure of detail: 14 is street level, 12 shows the main-road network but
+ *   not every suburban street. Roadguard shows it rather than inventing a "quality" label.
  * @param attribution the licence text that must be displayed while this data is in use.
  */
 data class MapPackage(
@@ -17,10 +22,19 @@ data class MapPackage(
     val downloadUrl: String,
     val sizeBytes: Long?,
     val sha256: String?,
+    val maxZoom: Int?,
     val attribution: String,
     val licence: String,
     val coversWholeCountry: Boolean,
-)
+) {
+    /** True when this archive carries street-level geometry rather than just the main network. */
+    val isStreetLevel: Boolean get() = (maxZoom ?: 0) >= STREET_LEVEL_ZOOM
+
+    companion object {
+        /** Zoom at which suburban street geometry is present in the Protomaps Basemap schema. */
+        const val STREET_LEVEL_ZOOM = 14
+    }
+}
 
 /** Where a map install has got to. */
 sealed interface MapInstallState {
@@ -61,12 +75,13 @@ enum class MapFailureReason(val message: String) {
     NoNetwork("Map installation needs an internet connection the first time"),
 
     /**
-     * The catalogue names a package the server does not have.
+     * The catalogue names a file the server does not have.
      *
-     * Distinguished from a generic download failure because it is not something the user can fix by
-     * retrying: the archive has not been published for this build yet.
+     * Distinguished from a generic download failure because retrying the same region will not help:
+     * either the asset was moved or the catalogue is pointing at the wrong URL. Choosing a different
+     * region may well work.
      */
-    NotPublished("The offline map package has not been published for this build yet"),
+    NotPublished("That region's map file is not available at the moment"),
     InsufficientStorage("There is not enough free space to install the map"),
     DownloadFailed("The map download could not be completed"),
     VerificationFailed("The downloaded map data was incomplete or corrupt"),

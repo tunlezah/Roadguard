@@ -40,20 +40,39 @@ object MapInstaller {
      * with the magic bytes its extension implies. That catches the realistic failure -- a truncated
      * download or an HTML error page saved as a map -- without pretending to be a checksum.
      */
-    fun verify(file: File, chosen: MapPackage): Boolean {
+    fun verify(file: File, chosen: MapPackage): Boolean = verificationFailure(file, chosen) == null
+
+    /**
+     * Structural verification, returning *why* it failed.
+     *
+     * The reason matters. "The downloaded map data was incomplete or corrupt" tells a user nothing
+     * they can act on, and the most interesting failure -- a complete, valid archive in a schema
+     * the bundled style cannot draw -- would otherwise install cleanly and render a blank map.
+     *
+     * @return null when the archive is acceptable, else a short reason for the log and the UI.
+     */
+    fun verificationFailure(file: File, chosen: MapPackage): String? {
         if (!file.exists() || file.length() < MIN_PLAUSIBLE_BYTES) {
-            Log.w(TAG, "map archive is implausibly small: ${file.length()} bytes")
-            return false
+            return "archive is implausibly small: ${file.length()} bytes"
         }
         chosen.sizeBytes?.let { expected ->
             // Allow a small tolerance: some mirrors publish rounded sizes.
             val tolerance = (expected / 100).coerceAtLeast(64 * 1024)
             if (file.length() < expected - tolerance) {
-                Log.w(TAG, "map archive is short: ${file.length()} of $expected bytes")
-                return false
+                return "archive is short: ${file.length()} of $expected bytes"
             }
         }
-        return hasExpectedMagic(file, archiveExtension(chosen.downloadUrl))
+        val extension = archiveExtension(chosen.downloadUrl)
+        if (!hasExpectedMagic(file, extension)) {
+            return "archive does not begin with the magic bytes a $extension file must have"
+        }
+        // For PMTiles go further than the magic: read the header and the embedded layer list, so a
+        // wrong-schema archive is rejected here rather than discovered as an empty map on a drive.
+        if (extension == ".pmtiles") {
+            PmtilesArchive.rejectionReason(file, MapStyleProvider.REQUIRED_SOURCE_LAYERS)
+                ?.let { return it }
+        }
+        return null
     }
 
     /**

@@ -15,7 +15,7 @@
 ./gradlew :app:testDebugUnitTest
 ```
 
-**338 tests. 0 failures. 0 errors. 0 skipped.** About 31 seconds of test execution on a warm
+**368 tests. 0 failures. 0 errors. 0 skipped.** About 35 seconds of test execution on a warm
 build.
 
 | Suite | Tests | What it holds in place |
@@ -34,6 +34,8 @@ build.
 | `DeviceTierScorerTest` | 16 | Every scoring combination, and both vetoes (`isLowRamDevice`, no hardware 1080p encoder) |
 | `VideoOverlayChromeUiTest` | 16 | **Compose UI.** The display-only guarantee (§5) in both the caption and the accessibility description, and blocker messaging with and without an action |
 | `SettingsRepositoryTest` | 12 | Round-tripping through DataStore, defaults, migration of absent keys |
+| `PmtilesArchiveTest` | 18 | PMTiles v3 header parsing, and rejection of wrong-schema, raster, truncated, unsupported-version and too-coarse archives — each with a stated reason |
+| `MapAssetTest` | 12 | The shipped styles and map catalogue: the style/installer source-layer contract, asset-only glyphs and sprites, the layer budget, day/night structural parity, and every catalogue entry's size, zoom, URL and licence |
 | `ThemeUiTest` | 11 | **Compose UI.** All four themes; OLED being true black in every surface role and still true black under dynamic colour |
 | `RoadguardWindowInfoTest` | 7 | The pane-arrangement rule, including ties, one-dp differences, freeform and foldable windows |
 | `RoadguardColorContrastTest` | 5 | Status colours meeting contrast against their own backgrounds, in every palette |
@@ -52,7 +54,7 @@ all answered by code that is exhaustively exercised on every push.
 
 ## 3. Compose UI tests that run on the JVM
 
-67 of the 338 are real Compose UI tests: they compose the production composables, read the
+67 of the 368 are real Compose UI tests: they compose the production composables, read the
 semantics tree, and perform clicks. They live in `src/test` under Robolectric rather than in
 `src/androidTest`, which is a deliberate trade:
 
@@ -110,7 +112,7 @@ database or real hardware, and those paths are consequently unverified end to en
 | --- | --- |
 | `StorageReconciler`'s five repair cases | needs a real filesystem and a real Room database |
 | `Mp4Inspector` against real files | needs files a real muxer wrote, including a genuinely truncated one |
-| Map download → verify → install → render | needs the network, the filesystem and a GPU |
+| Map download → install → render | needs the network, the filesystem and a GPU. The *verification* step is now unit tested (`PmtilesArchiveTest`); the download, install and render steps are not |
 | `RecordingController`'s segment loop | needs a camera |
 | The foreground service surviving screen-off | needs a device; an emulator does not model vendor process-killing |
 | GPX writing, `FileProvider` sharing | needs a filesystem and another app to share to |

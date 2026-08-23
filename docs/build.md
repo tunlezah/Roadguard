@@ -35,7 +35,7 @@ else.
 ```bash
 ./gradlew :app:assembleDebug          # debug APK
 ./gradlew :app:assembleRelease        # release APK (minified, resource-shrunk)
-./gradlew :app:testDebugUnitTest      # 338 JVM tests, including 67 Compose UI tests
+./gradlew :app:testDebugUnitTest      # 368 JVM tests, including 67 Compose UI tests
 ./gradlew :app:lintDebug              # Android Lint, abortOnError = true
 ./gradlew :app:lintVitalRelease       # the release-blocking lint subset
 ```
@@ -170,8 +170,10 @@ tests. It is opt-in because emulator runs are slow and cannot exercise the camer
 meaningfully. **Note that there are currently no instrumentation tests for it to run** — see
 `docs/testing.md`.
 
-`.github/workflows/build-offline-map.yml` is a separate manual workflow that builds and publishes
-the offline map archive. See `docs/offline-maps.md` §5.
+`.github/workflows/build-offline-map.yml` is a separate manual workflow that builds a self-hosted
+map archive. It is **not currently usable** -- it produces Shortbread tiles and the app now renders
+the Protomaps Basemap schema, so its own schema gate fails by design rather than publishing an
+archive the app would reject. See `docs/offline-maps.md` §5.
 
 ## 8. Reproducibility
 
@@ -233,7 +235,7 @@ Reproduced from a clean invocation of the commands in §2 in this environment:
 
 | | |
 | --- | --- |
-| Unit tests | **338 tests, 0 failures, 0 errors, 0 skipped** |
+| Unit tests | **368 tests, 0 failures, 0 errors, 0 skipped** |
 | Lint | clean against the baseline in §10 |
 | Debug APK | builds; `apksigner verify` passes |
 | Release APK | builds; `apksigner verify` passes |

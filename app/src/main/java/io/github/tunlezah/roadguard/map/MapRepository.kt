@@ -58,10 +58,38 @@ class MapRepository(
     var selectedPackage: MapPackage? = null
         private set
 
-    /** Refreshes state from disk. Cheap; safe to call on every app start. */
-    fun refresh() {
+    /**
+     * Chooses which region to install.
+     *
+     * Only meaningful before or between installs: switching region while a download is running
+     * would leave a half-downloaded file for a package nobody selected, so an active download is
+     * cancelled first. Any *installed* archive for the previous region is left alone — the caller
+     * decides whether to remove it, because on a phone the user may well want to keep both.
+     *
+     * @return true when the selection changed.
+     */
+    fun select(pack: MapPackage): Boolean {
+        if (selectedPackage?.id == pack.id) return false
+        installJob?.cancel()
+        installJob = null
+        selectedPackage = pack
+        // Off the caller's thread, like refresh(): reading the install marker is file I/O, and
+        // this is called from a settings tap.
+        scope.launch { _installState.value = readInstalledState(pack) ?: MapInstallState.NotInstalled }
+        return true
+    }
+
+    /**
+     * Refreshes state from disk. Cheap; safe to call on every app start.
+     *
+     * @param preferredId the region the user chose on a previous run. Falls back to the catalogue
+     *   default when it is null or names a package this build no longer ships.
+     */
+    fun refresh(preferredId: String? = null) {
         scope.launch {
-            selectedPackage = selectedPackage ?: MapPackageCatalog.defaultFor(packages)
+            selectedPackage = selectedPackage
+                ?: MapPackageCatalog.byId(packages, preferredId)
+                ?: MapPackageCatalog.defaultFor(packages)
             val chosen = selectedPackage
             if (chosen == null) {
                 _installState.value = MapInstallState.Failed(
@@ -171,12 +199,13 @@ class MapRepository(
         val part = downloaded.getOrThrow()
         _installState.value = MapInstallState.Verifying(chosen.id)
 
-        val verified = withContext(Dispatchers.IO) { MapInstaller.verify(part, chosen) }
-        if (!verified) {
+        val failure = withContext(Dispatchers.IO) { MapInstaller.verificationFailure(part, chosen) }
+        if (failure != null) {
             // A corrupt download is discarded, not kept: keeping it would make every future retry
             // resume into the same broken bytes.
             part.delete()
-            _installState.value = MapInstallState.Failed(chosen.id, MapFailureReason.VerificationFailed, null)
+            Log.w(TAG, "rejected ${chosen.id}: $failure")
+            _installState.value = MapInstallState.Failed(chosen.id, MapFailureReason.VerificationFailed, failure)
             return
         }
 

@@ -112,8 +112,8 @@ registration, no payment, CC-BY 4.0), so weather ships on Open-Meteo with coordi
 The Moto G04's Mali-G57 is an **MP1** part. Published vector map styles run to 200–324 layers,
 each at least one draw call per tile per frame.
 
-**Consequence:** an 18-layer style, with the whole road network as two layers using `match` on
-Shortbread's `kind` — safe because Shortbread guarantees z-order within a tile.
+**Consequence:** an 18-layer style, with the whole road network as two layers using `match` on the
+schema's `kind` attribute.
 
 ## 2. Toolchain findings
 

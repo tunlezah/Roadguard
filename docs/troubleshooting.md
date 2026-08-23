@@ -166,7 +166,7 @@ with no SIM, no mobile data and no Wi-Fi, forever.
 | Message | Meaning |
 | --- | --- |
 | "needs an internet connection the first time" | connect and retry |
-| "has not been published for this build yet" | the map release asset does not exist yet — see `docs/offline-maps.md` §5. Retrying will not help |
+| "not available at the moment" | that region's file could not be fetched. Try another region; retrying the same one may not help |
 | "not enough free space" | the archive is about 1.1 GB, and Roadguard checks the recorder's reserve first |
 | "download could not be completed" | resumable; retry |
 | "data was incomplete or corrupt" | the partial is discarded and re-downloaded |

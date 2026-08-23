@@ -9,6 +9,7 @@ import androidx.lifecycle.viewmodel.CreationExtras
 import io.github.tunlezah.roadguard.core.RoadguardContainer
 import io.github.tunlezah.roadguard.data.SegmentEntity
 import io.github.tunlezah.roadguard.map.MapInstallState
+import io.github.tunlezah.roadguard.map.MapPackage
 import io.github.tunlezah.roadguard.settings.LoopBudget
 import io.github.tunlezah.roadguard.settings.Settings
 import io.github.tunlezah.roadguard.settings.SettingsRepository
@@ -68,7 +69,11 @@ class StorageViewModel(application: Application) : AndroidViewModel(application)
             action = filesystem.action,
         )
     }.combine(container.mapRepository.installState) { snapshot, mapInstall ->
-        snapshot.copy(mapInstall = mapInstall)
+        snapshot.copy(
+            mapInstall = mapInstall,
+            mapPackages = container.mapRepository.packages,
+            mapPackage = container.mapRepository.selectedPackage,
+        )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
@@ -77,7 +82,7 @@ class StorageViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         // The map install state is read from disk, not held in memory, so the screen has to ask.
-        container.mapRepository.refresh()
+        container.mapRepository.refresh(container.settings.value.mapPackageId)
         refresh()
     }
 
@@ -166,6 +171,37 @@ class StorageViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /** Called once the screen has shown the outcome of a command. */
+    /** Starts or resumes the offline map download for the selected region. */
+    fun installMap() {
+        container.mapRepository.refresh(container.settings.value.mapPackageId)
+        container.mapRepository.install()
+    }
+
+    fun pauseMapInstall() = container.mapRepository.pause()
+
+    /**
+     * Switches region, and remembers the choice.
+     *
+     * The previously installed archive is removed, because the alternative -- keeping several
+     * hundred megabytes of a map the user has just replaced -- is exactly the kind of silent
+     * storage consumption the rest of this screen exists to prevent.
+     */
+    fun selectMapPackage(pack: MapPackage) = viewModelScope.launch {
+        val previous = container.mapRepository.selectedPackage
+        if (previous != null && previous.id != pack.id) {
+            container.mapRepository.uninstall()
+        }
+        if (!container.mapRepository.select(pack)) return@launch
+        container.settingsRepository.update { it.copy(mapPackageId = pack.id) }
+        remeasure()
+    }
+
+    fun removeMap() = viewModelScope.launch {
+        container.mapRepository.uninstall()
+        remeasure()
+        post(StorageAction.Message("Offline map removed"))
+    }
+
     fun clearAction() = measured.update { it.copy(action = null) }
 
     private suspend fun measureAll(requestedBudgetBytes: Long) {
@@ -231,6 +267,8 @@ data class StorageUiState(
     val protectedBytes: Long = 0L,
     val mapInstall: MapInstallState = MapInstallState.NotInstalled,
     val mapBytes: Long = 0L,
+    val mapPackages: List<MapPackage> = emptyList(),
+    val mapPackage: MapPackage? = null,
     val volumes: List<StorageVolumeOption> = emptyList(),
     val quarantineFileCount: Int = 0,
     val quarantineBytes: Long = 0L,
@@ -277,4 +315,7 @@ sealed interface StorageAction {
     data class Deleted(val bytes: Long) : StorageAction
     data object DeleteFailed : StorageAction
     data object MeasurementFailed : StorageAction
+
+    /** A one-off confirmation with nothing further to say about it. */
+    data class Message(val text: String) : StorageAction
 }
