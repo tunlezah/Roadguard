@@ -176,6 +176,28 @@ declared transform, inverted.
 Redraw happens only when the *content* changes, so a HUD that ticks once a second costs one
 `lockCanvas` per second rather than one per frame.
 
+### Placement is computed, not assumed
+
+`overlay/OverlayLayout.kt` decides where each label goes, and the renderer only rasterises what it
+returns. Two rules, both of which exist because of a real bug:
+
+* **Text is sized from the shorter frame dimension**, not the height. Sizing off height alone made
+  a 1080x1920 portrait frame 78% larger text than the 1920x1080 landscape frame of the same
+  resolution -- so the date/time stamp ran to x=912 while the speed started at x=468 and the two
+  collided. Landscape happened to fit, which is why it only showed up one way round.
+* **Every block is measured and then verified.** The layout checks that no two scrim rectangles
+  intersect and that all of them lie inside the frame. If the check fails it retries with the speed
+  moved to its own row, and only then with smaller text -- rearranging beats shrinking, because the
+  speed is the value a driver takes in at a glance.
+
+The class is pure Kotlin with an injected text-measurement interface, so the no-overlap guarantee is
+unit tested across every resolution in the recording ladder, both orientations, all 63 non-empty
+combinations of the six overlay fields, and two different font metrics. That is 693 checked layouts
+per run rather than one eyeballed screen.
+
+Scrim and text are both drawn short of opaque (`SCRIM_ALPHA = 64`, `TEXT_ALPHA = 224`): the overlay
+is evidence *about* the footage, not a replacement for the part of the frame it sits on.
+
 The on-screen HUD is separate: plain Compose widgets over the viewfinder. Free, and immune to
 the preview/recording distinction.
 
