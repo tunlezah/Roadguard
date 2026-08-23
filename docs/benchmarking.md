@@ -14,10 +14,10 @@
 
 | Metric | Value |
 | --- | --- |
-| Unit test suite | **368 tests, 0 failures, 0 errors, 0 skipped** (301 plain JVM, 67 Compose UI) |
+| Unit test suite | **386 tests, 0 failures, 0 errors, 0 skipped** (319 plain JVM, 67 Compose UI) |
 | Unit test wall clock | ~31 s of test execution (warm Gradle, configuration cache hit) |
 | Debug APK | 83,986,408 bytes (80.1 MiB) |
-| Release APK | 38,392,577 bytes (36.6 MiB) |
+| Release APK | 38,408,961 bytes (36.6 MiB) |
 | ABIs in both | arm64-v8a, armeabi-v7a, x86_64 |
 | Bundled map assets | 2.54 MiB (24 glyph PBFs, 4 sprite files) |
 | Offline map archive | 231 MiB whole-of-Australia, or 45-348 MiB per state; downloaded once |

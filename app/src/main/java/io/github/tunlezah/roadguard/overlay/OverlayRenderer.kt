@@ -26,6 +26,13 @@ import androidx.core.graphics.withMatrix
  * display space. No sensor angles, no per-device special cases -- just the inverse of the
  * transform CameraX says it is going to apply.
  *
+ * ### Where each label goes
+ *
+ * Not decided here. [OverlayLayout] measures every block and returns positions that provably do
+ * not overlap in either orientation; this class only rasterises them. That split exists because
+ * the overlap bug it fixes was invisible in landscape and obvious in portrait, which is exactly
+ * the kind of thing a unit test should catch and a human should not have to.
+ *
  * ### Cost
  *
  * The renderer is called at most once a second, and only when the content actually changed. All
@@ -38,22 +45,45 @@ class OverlayRenderer {
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        alpha = TEXT_ALPHA
     }
     private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.BLACK
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-        alpha = 190
+        alpha = SHADOW_ALPHA
     }
     private val scrimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.BLACK
-        alpha = 110
+        alpha = SCRIM_ALPHA
     }
     private val accentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = PROTECTED_COLOUR
         typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        alpha = TEXT_ALPHA
     }
-    private val bounds = Rect()
     private val scratch = RectF()
+
+    /** Measures with the same paint that will draw, so layout and rendering cannot disagree. */
+    private val metrics = object : OverlayLayout.Metrics {
+        private val measuring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        }
+
+        override fun width(text: String, textSize: Float): Float {
+            measuring.textSize = textSize
+            return measuring.measureText(text)
+        }
+
+        override fun ascent(textSize: Float): Float {
+            measuring.textSize = textSize
+            return -measuring.fontMetrics.ascent
+        }
+
+        override fun descent(textSize: Float): Float {
+            measuring.textSize = textSize
+            return measuring.fontMetrics.descent
+        }
+    }
 
     /**
      * @param canvas the frame's overlay canvas, in buffer coordinates.
@@ -76,86 +106,57 @@ class OverlayRenderer {
         if (content.isEmpty) return
         if (cropRect.isEmpty || bufferWidth <= 0 || bufferHeight <= 0) return
 
-        val displaySize = displaySize(cropRect, rotationDegrees)
+        val (displayWidth, displayHeight) = displaySize(cropRect, rotationDegrees)
+        val layout = OverlayLayout.layout(displayWidth, displayHeight, content, metrics)
+        if (layout.isEmpty) return
+
         val matrix = buildDisplayMatrix(cropRect, rotationDegrees, mirrored)
 
         // withMatrix restores the canvas even if drawing throws, which matters here: this runs on
         // the GL thread and a leaked transform would corrupt every later frame.
         canvas.withMatrix(matrix) {
-            drawUpright(this, content, displaySize.first, displaySize.second)
-        }
-    }
-
-    /** Lays the overlay out in upright display space. */
-    private fun drawUpright(canvas: Canvas, content: OverlayContent, width: Int, height: Int) {
-        val margin = height * MARGIN_FRACTION
-        val bodySize = height * BODY_TEXT_FRACTION
-        val speedSize = height * SPEED_TEXT_FRACTION
-
-        // ── Bottom-left stack: date, time, coordinates ────────────────────────────────────
-        val leftLines = buildList {
-            val stamp = listOfNotNull(content.dateText, content.timeText).joinToString("  ")
-            if (stamp.isNotEmpty()) add(stamp)
-            content.coordinatesText?.let { add(it) }
-            content.weatherText?.let { add(it) }
-        }
-        var baseline = height - margin
-        leftLines.asReversed().forEach { line ->
-            drawLabel(canvas, line, margin, baseline, bodySize, textPaint)
-            baseline -= bodySize * LINE_SPACING
-        }
-
-        // ── Bottom-right: speed, the one value a driver reads at a glance ─────────────────
-        content.speedText?.let { speed ->
-            textPaint.textSize = speedSize
-            textPaint.getTextBounds(speed, 0, speed.length, bounds)
-            val x = width - margin - bounds.width()
-            drawLabel(canvas, speed, x, height - margin, speedSize, textPaint)
-        }
-
-        // ── Top-right: protection notice ──────────────────────────────────────────────────
-        content.protectedLabel?.let { label ->
-            accentPaint.textSize = bodySize
-            accentPaint.getTextBounds(label, 0, label.length, bounds)
-            val x = width - margin - bounds.width()
-            drawLabel(canvas, label, x, margin + bodySize, bodySize, accentPaint)
+            layout.blocks.forEach { block -> drawBlock(this, block) }
         }
     }
 
     /**
-     * Draws one label with a scrim behind it and a dark offset copy underneath.
+     * Draws one label: a scrim, a dark offset copy, then the text.
      *
-     * A dashcam overlay has to stay readable over a bright sky and over dark asphalt in the
-     * same frame, so it gets both: the scrim handles bright backgrounds, the offset copy
-     * handles busy ones.
+     * A dashcam overlay has to stay readable over a bright sky and over dark asphalt in the same
+     * frame, so it gets both: the scrim handles bright backgrounds, the offset copy handles busy
+     * ones. Both are deliberately translucent -- see [SCRIM_ALPHA].
      */
-    private fun drawLabel(canvas: Canvas, text: String, x: Float, baselineY: Float, size: Float, paint: Paint) {
-        paint.textSize = size
-        paint.getTextBounds(text, 0, text.length, bounds)
-        val padding = size * SCRIM_PADDING_FRACTION
-        scratch.set(
-            x - padding,
-            baselineY - bounds.height() - padding,
-            x + bounds.width() + padding,
-            baselineY + padding * 0.6f,
-        )
-        canvas.drawRoundRect(scratch, padding, padding, scrimPaint)
+    private fun drawBlock(canvas: Canvas, block: OverlayLayout.Block) {
+        val paint = if (block.id == OverlayLayout.BlockId.Protected) accentPaint else textPaint
+        val radius = block.textSize * OverlayLayout.SCRIM_PADDING_FRACTION
 
-        shadowPaint.textSize = size
-        val offset = size * SHADOW_OFFSET_FRACTION
-        canvas.drawText(text, x + offset, baselineY + offset, shadowPaint)
-        canvas.drawText(text, x, baselineY, paint)
+        scratch.set(block.scrim.left, block.scrim.top, block.scrim.right, block.scrim.bottom)
+        canvas.drawRoundRect(scratch, radius, radius, scrimPaint)
+
+        paint.textSize = block.textSize
+        shadowPaint.textSize = block.textSize
+        val offset = block.textSize * SHADOW_OFFSET_FRACTION
+        canvas.drawText(block.text, block.x + offset, block.baselineY + offset, shadowPaint)
+        canvas.drawText(block.text, block.x, block.baselineY, paint)
     }
 
     companion object {
         /** Amber, matching the "protected" status colour in the app's palette. */
         const val PROTECTED_COLOUR = 0xFFFFC44D.toInt()
 
-        const val MARGIN_FRACTION = 0.035f
-        const val BODY_TEXT_FRACTION = 0.038f
-        const val SPEED_TEXT_FRACTION = 0.070f
-        const val LINE_SPACING = 1.35f
-        const val SCRIM_PADDING_FRACTION = 0.28f
+        /**
+         * Alpha values, all deliberately short of opaque.
+         *
+         * The overlay is evidence *about* the footage, not a replacement for the part of the
+         * footage it sits on, so it is drawn light enough to see the road through. These are the
+         * lowest values that still survived the two cases a dashcam overlay has to survive -- white
+         * text over a bright sky, and over sunlit concrete -- with the scrim carrying the contrast
+         * rather than the text being made heavier.
+         */
+        const val SCRIM_ALPHA = 64
+        const val TEXT_ALPHA = 224
+        const val SHADOW_ALPHA = 150
+
         const val SHADOW_OFFSET_FRACTION = 0.055f
 
         /** Size of the frame as a viewer will see it, after rotation. */
