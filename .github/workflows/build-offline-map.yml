@@ -1,5 +1,18 @@
 name: Build offline map
 
+# ⚠️  CURRENTLY INCOMPATIBLE WITH THE SHIPPED APP, ON PURPOSE.
+#
+# This workflow builds **Shortbread 1.0** tiles. The app now renders the **Protomaps Basemap**
+# schema, because that is the schema of the archives in app/src/main/assets/map_packages.json, so
+# the "Check the style's source layers exist in the archive" step below will fail: the style asks
+# for earth/roads/water and a Shortbread archive offers ocean/land/water_polygons/streets.
+#
+# That failure is the correct outcome rather than a bug -- it stops the workflow publishing an
+# archive the app would reject at install time. It is kept, rather than deleted, because
+# self-hosting is still the right answer if the upstream assets ever go away; making it useful again
+# means pointing it at a Protomaps-basemap build (or regenerating the styles for Shortbread). Until
+# somebody does one of those, do not run it. See docs/offline-maps.md.
+#
 # Builds Roadguard's whole-of-Australia offline map archive and publishes it as a release asset,
 # then updates the app's catalogue with the artifact's real size and SHA-256.
 #

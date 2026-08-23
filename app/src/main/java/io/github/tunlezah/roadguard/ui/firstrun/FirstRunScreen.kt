@@ -13,10 +13,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -25,6 +28,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -38,12 +42,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.tunlezah.roadguard.R
 import io.github.tunlezah.roadguard.map.MapFailureReason
 import io.github.tunlezah.roadguard.map.MapInstallState
+import io.github.tunlezah.roadguard.map.MapPackage
 import io.github.tunlezah.roadguard.ui.theme.LocalRoadguardStatusColors
 
 /**
@@ -118,6 +124,7 @@ fun FirstRunScreen(
                         state = state,
                         onRetry = viewModel::installMap,
                         onPause = viewModel::pauseMapInstall,
+                        onSelectPackage = viewModel::selectMapPackage,
                     )
 
                     SetupStep.Ready -> ReadyStep(
@@ -303,7 +310,14 @@ private fun LocationStep(state: FirstRunUiState) {
 }
 
 @Composable
-private fun MapStep(state: FirstRunUiState, onRetry: () -> Unit, onPause: () -> Unit) {
+private fun MapStep(
+    state: FirstRunUiState,
+    onRetry: () -> Unit,
+    onPause: () -> Unit,
+    onSelectPackage: (MapPackage) -> Unit,
+) {
+    val busy = state.mapInstall is MapInstallState.Downloading ||
+        state.mapInstall is MapInstallState.Verifying
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Offline map", style = MaterialTheme.typography.headlineSmall)
         Text(
@@ -311,6 +325,19 @@ private fun MapStep(state: FirstRunUiState, onRetry: () -> Unit, onPause: () -> 
                 "and no Wi-Fi.",
             style = MaterialTheme.typography.bodyMedium,
         )
+
+        // The whole country is the default so nobody has to make a decision to get a working map,
+        // and so crossing a state border never blanks it. A single state is the better choice for
+        // most drivers, though, so the trade-off is stated rather than buried.
+        if (state.mapPackages.size > 1) {
+            MapRegionPicker(
+                packages = state.mapPackages,
+                selected = state.mapPackage,
+                enabled = !busy && !state.mapInstalled,
+                onSelect = onSelectPackage,
+            )
+        }
+
         state.mapPackage?.let { pack ->
             Text(
                 text = pack.displayName + (
@@ -385,9 +412,9 @@ private fun MapStep(state: FirstRunUiState, onRetry: () -> Unit, onPause: () -> 
                                 "including recording, works right now."
 
                         MapFailureReason.NotPublished ->
-                            "Roadguard builds its own map data instead of downloading it from " +
-                                "somebody else's server. Until that archive is published, the map " +
-                                "pane stays empty. Recording is unaffected."
+                            "The map file for this region is not available at the moment. Try a " +
+                                "different region, or skip this step -- recording is unaffected " +
+                                "and the map can be installed later from Storage."
 
                         MapFailureReason.NotConfigured ->
                             "This build has no map package configured. Recording is unaffected."
@@ -405,6 +432,71 @@ private fun MapStep(state: FirstRunUiState, onRetry: () -> Unit, onPause: () -> 
             }
 
             MapInstallState.NotInstalled -> Button(onClick = onRetry) { Text("Install the map") }
+        }
+    }
+}
+
+/**
+ * Region chooser.
+ *
+ * Deliberately a plain list of radio rows rather than a dropdown: there are eight options, the
+ * differences between them (size, and whether they carry street-level detail) matter, and a driver
+ * setting the app up in a car park should not have to open a menu to see them.
+ */
+@Composable
+private fun MapRegionPicker(
+    packages: List<MapPackage>,
+    selected: MapPackage?,
+    enabled: Boolean,
+    onSelect: (MapPackage) -> Unit,
+) {
+    Column(
+        modifier = Modifier.selectableGroup(),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        packages.forEach { pack ->
+            val isSelected = pack.id == selected?.id
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .selectable(
+                        selected = isSelected,
+                        enabled = enabled,
+                        role = Role.RadioButton,
+                        onClick = { onSelect(pack) },
+                    )
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RadioButton(selected = isSelected, onClick = null, enabled = enabled)
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = pack.displayName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (enabled) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                    Text(
+                        text = buildString {
+                            pack.sizeBytes?.let { append("${it / (1024 * 1024)} MB") }
+                            append(
+                                if (pack.isStreetLevel) {
+                                    if (isEmpty()) "street level" else " · street level"
+                                } else {
+                                    if (isEmpty()) "main roads only" else " · main roads only"
+                                },
+                            )
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
     }
 }

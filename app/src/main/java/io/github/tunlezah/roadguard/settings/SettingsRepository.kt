@@ -84,6 +84,7 @@ class SettingsRepository(private val context: Context) {
         val MAP_FOLLOWS = booleanPreferencesKey("map_follows_vehicle")
         val MAP_NORTH_UP = booleanPreferencesKey("map_north_up")
         val MAP_AUTO_DOWNLOAD = booleanPreferencesKey("map_auto_download")
+        val MAP_PACKAGE_ID = stringPreferencesKey("map_package_id")
 
         val SETUP_COMPLETE = booleanPreferencesKey("setup_complete")
         val ACCEPTED_DISCLAIMER = booleanPreferencesKey("accepted_disclaimer")
@@ -132,6 +133,7 @@ class SettingsRepository(private val context: Context) {
             mapFollowsVehicle = this[Keys.MAP_FOLLOWS] ?: defaults.mapFollowsVehicle,
             mapNorthUp = this[Keys.MAP_NORTH_UP] ?: defaults.mapNorthUp,
             mapAutoDownload = this[Keys.MAP_AUTO_DOWNLOAD] ?: defaults.mapAutoDownload,
+            mapPackageId = this[Keys.MAP_PACKAGE_ID] ?: defaults.mapPackageId,
             setupComplete = this[Keys.SETUP_COMPLETE] ?: defaults.setupComplete,
             acceptedRecordingDisclaimer = this[Keys.ACCEPTED_DISCLAIMER] ?: defaults.acceptedRecordingDisclaimer,
         )
@@ -178,6 +180,10 @@ class SettingsRepository(private val context: Context) {
         preferences[Keys.MAP_FOLLOWS] = mapFollowsVehicle
         preferences[Keys.MAP_NORTH_UP] = mapNorthUp
         preferences[Keys.MAP_AUTO_DOWNLOAD] = mapAutoDownload
+        // Absent rather than empty when the user has made no choice, so `?:` in the read path
+        // falls through to the catalogue default instead of looking up a package called "".
+        mapPackageId?.let { preferences[Keys.MAP_PACKAGE_ID] = it }
+            ?: preferences.remove(Keys.MAP_PACKAGE_ID)
         preferences[Keys.SETUP_COMPLETE] = setupComplete
         preferences[Keys.ACCEPTED_DISCLAIMER] = acceptedRecordingDisclaimer
     }

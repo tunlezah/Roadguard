@@ -14,13 +14,13 @@
 
 | Metric | Value |
 | --- | --- |
-| Unit test suite | **338 tests, 0 failures, 0 errors, 0 skipped** (271 plain JVM, 67 Compose UI) |
+| Unit test suite | **368 tests, 0 failures, 0 errors, 0 skipped** (301 plain JVM, 67 Compose UI) |
 | Unit test wall clock | ~31 s of test execution (warm Gradle, configuration cache hit) |
 | Debug APK | 83,986,408 bytes (80.1 MiB) |
-| Release APK | 38,391,577 bytes (36.6 MiB) |
+| Release APK | 38,392,577 bytes (36.6 MiB) |
 | ABIs in both | arm64-v8a, armeabi-v7a, x86_64 |
 | Bundled map assets | 2.54 MiB (24 glyph PBFs, 4 sprite files) |
-| Offline map archive | 1,133,229,927 bytes (1.06 GiB), downloaded once |
+| Offline map archive | 231 MiB whole-of-Australia, or 45-348 MiB per state; downloaded once |
 
 The debug/release gap is almost entirely MapLibre's three sets of native renderers plus
 Compose tooling; R8 and the resource shrinker account for the rest. A single-ABI release APK

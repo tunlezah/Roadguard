@@ -82,7 +82,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        container.mapRepository.refresh()
+        container.mapRepository.refresh(container.settings.value.mapPackageId)
         container.weatherRepository.start()
         // The viewfinder is only worth producing frames for while the UI is on screen.
         container.recordingController.setPreviewEnabled(true)

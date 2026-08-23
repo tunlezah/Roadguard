@@ -57,6 +57,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.tunlezah.roadguard.R
 import io.github.tunlezah.roadguard.data.SegmentEntity
+import io.github.tunlezah.roadguard.map.MapPackage
+import androidx.compose.material3.LinearProgressIndicator
 import io.github.tunlezah.roadguard.map.MapInstallState
 import io.github.tunlezah.roadguard.storage.StorageState
 import io.github.tunlezah.roadguard.storage.StorageVolumeOption
@@ -105,6 +107,10 @@ fun StorageScreen(
         onFreeSpaceNow = { viewModel.freeSpaceNow() },
         onUnprotect = { viewModel.unprotect(it) },
         onDeleteProtected = { viewModel.deleteProtectedSegment(it) },
+        onSelectMapPackage = { viewModel.selectMapPackage(it) },
+        onInstallMap = { viewModel.installMap() },
+        onPauseMapInstall = { viewModel.pauseMapInstall() },
+        onRemoveMap = { viewModel.removeMap() },
         onActionShown = { viewModel.clearAction() },
     )
 }
@@ -120,6 +126,10 @@ private fun StorageContent(
     onFreeSpaceNow: () -> Unit,
     onUnprotect: (Long) -> Unit,
     onDeleteProtected: (Long) -> Unit,
+    onSelectMapPackage: (MapPackage) -> Unit,
+    onInstallMap: () -> Unit,
+    onPauseMapInstall: () -> Unit,
+    onRemoveMap: () -> Unit,
     onActionShown: () -> Unit,
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -198,6 +208,16 @@ private fun StorageContent(
 
             if (state.volumes.size > 1) {
                 item { VolumeSection(state.volumes, onChooseVolume) }
+            }
+
+            item {
+                OfflineMapSection(
+                    state = state,
+                    onSelectMapPackage = onSelectMapPackage,
+                    onInstall = onInstallMap,
+                    onPause = onPauseMapInstall,
+                    onRemove = onRemoveMap,
+                )
             }
 
             item {
@@ -573,6 +593,95 @@ private fun VolumeSection(volumes: List<StorageVolumeOption>, onChooseVolume: (S
     }
 }
 
+// ── Offline map ────────────────────────────────────────────────────────────────────────
+
+/**
+ * The offline map: which region, how big, and where it is up to.
+ *
+ * This lives on the Storage screen rather than in Settings because the only thing about it a user
+ * ever needs to reconsider is how much of the phone it is occupying. Switching region replaces the
+ * installed archive rather than accumulating a second one -- stated on screen, because several
+ * hundred megabytes quietly retained is precisely what this screen exists to prevent.
+ */
+@Composable
+private fun OfflineMapSection(
+    state: StorageUiState,
+    onSelectMapPackage: (MapPackage) -> Unit,
+    onInstall: () -> Unit,
+    onPause: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    val install = state.mapInstall
+    val busy = install is MapInstallState.Downloading || install is MapInstallState.Verifying
+
+    StorageSection(title = "Offline map") {
+        Text(
+            text = mapInstallDescription(install),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        when (install) {
+            is MapInstallState.Downloading -> {
+                install.fraction
+                    ?.let { LinearProgressIndicator(progress = { it }, modifier = Modifier.fillMaxWidth()) }
+                    ?: LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Text(
+                    text = buildString {
+                        append("${install.bytesDownloaded / (1024 * 1024)} MB")
+                        install.totalBytes?.let { append(" of ${it / (1024 * 1024)} MB") }
+                        install.etaSeconds?.let {
+                            append(", about ${(it / 60).coerceAtLeast(1)} min remaining")
+                        }
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
+
+            is MapInstallState.Failed -> Notice(
+                text = install.detail?.let { "${install.reason.message} ($it)" } ?: install.reason.message,
+                iconRes = R.drawable.ic_error_outline,
+                container = MaterialTheme.colorScheme.errorContainer,
+                content = MaterialTheme.colorScheme.onErrorContainer,
+            )
+
+            else -> Unit
+        }
+
+        state.mapPackages.forEach { pack ->
+            ChoiceRow(
+                selected = pack.id == state.mapPackage?.id,
+                title = pack.displayName,
+                supporting = buildString {
+                    pack.sizeBytes?.let { append("${it / (1024 * 1024)} MB download") }
+                    if (isNotEmpty()) append(" · ")
+                    append(if (pack.isStreetLevel) "street level" else "main roads only")
+                },
+                onSelect = { if (!busy) onSelectMapPackage(pack) },
+            )
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            when {
+                busy -> TextButton(onClick = onPause) { Text("Pause") }
+                install is MapInstallState.Installed ->
+                    TextButton(onClick = onRemove) { Text("Remove map") }
+                else -> TextButton(onClick = onInstall) {
+                    Text(if (install is MapInstallState.Paused) "Resume download" else "Download map")
+                }
+            }
+        }
+
+        Notice(
+            text = "Downloaded once, then the map works with no SIM, no mobile data and no Wi-Fi. " +
+                "Choosing a different region replaces the installed one rather than keeping both.",
+            iconRes = R.drawable.ic_help_outline,
+            container = MaterialTheme.colorScheme.surfaceContainerHigh,
+            content = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
 // ── Protected footage ──────────────────────────────────────────────────────────────────
 
 @Composable
@@ -902,4 +1011,5 @@ private fun messageFor(action: StorageAction): String = when (action) {
     is StorageAction.Deleted -> "Deleted ${formatBytes(action.bytes)}"
     is StorageAction.DeleteFailed -> "That file could not be deleted; it is still on the device"
     is StorageAction.MeasurementFailed -> "Storage could not be measured just now"
+    is StorageAction.Message -> action.text
 }

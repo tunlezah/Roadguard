@@ -82,6 +82,13 @@ data class Settings(
     val mapFollowsVehicle: Boolean = true,
     val mapNorthUp: Boolean = false,
     val mapAutoDownload: Boolean = true,
+    /**
+     * Id of the offline map package the user chose, or null to use the catalogue default.
+     *
+     * Stored by id rather than by index so that adding or reordering regions in the catalogue
+     * cannot silently repoint an existing install at a different state.
+     */
+    val mapPackageId: String? = null,
 
     // ── First run ──────────────────────────────────────────────────────────────────
     val setupComplete: Boolean = false,

@@ -27,7 +27,7 @@ It has no accounts, no cloud, no analytics and no telemetry. Everything stays on
 
 > ### Status: complete and building; **never run on a device**
 >
-> The application is fully implemented, 338 automated tests pass, Android Lint is clean and both
+> The application is fully implemented, 368 automated tests pass, Android Lint is clean and both
 > APKs build and verify. **It has never been installed on a phone or an emulator** — no device was
 > available. So there are no screenshots, no measured benchmarks and no physical thermal
 > validation, and this README does not pretend otherwise. [What is and is not
@@ -121,7 +121,7 @@ Needs JDK 21 and the Android SDK (platform 37, build tools 37.0.0). Gradle comes
 pinned by version **and SHA-256**.
 
 ```bash
-./gradlew :app:testDebugUnitTest   # 338 tests
+./gradlew :app:testDebugUnitTest   # 368 tests
 ./gradlew :app:lintDebug
 ./gradlew :app:assembleRelease
 ```
@@ -141,7 +141,7 @@ can actually sideload. See [`docs/build.md`](docs/build.md).
 | [`docs/device-profiles.md`](docs/device-profiles.md) | How a device tier is *earned* from probed facts, and what each tier gates |
 | [`docs/storage.md`](docs/storage.md) | The reserve, the budget, what is never deleted, start-up repair |
 | [`docs/event-detection.md`](docs/event-detection.md) | Every detector stage, the tuning table, and an honest statement of limits |
-| [`docs/offline-maps.md`](docs/offline-maps.md) | PMTiles, Shortbread, the 18-layer style, installation and recovery |
+| [`docs/offline-maps.md`](docs/offline-maps.md) | PMTiles, the Protomaps Basemap schema, the 18-layer style, installation and recovery |
 | [`docs/privacy.md`](docs/privacy.md) | Everything that leaves the device, every permission, how to verify it |
 | [`docs/testing.md`](docs/testing.md) | What runs, what it covers, **what is untested**, and a manual test plan |
 | [`docs/benchmarking.md`](docs/benchmarking.md) | Calculated figures marked as calculated, and the measurements nobody has taken |
@@ -156,12 +156,12 @@ can actually sideload. See [`docs/build.md`](docs/build.md).
 
 | | |
 | --- | --- |
-| Automated tests | **338 pass, 0 fail** — including 67 Compose UI tests that run on the JVM |
+| Automated tests | **368 pass, 0 fail** — including 67 Compose UI tests that run on the JVM |
 | Android Lint | clean, against a baseline of four reviewed categories |
 | Debug APK | builds, `apksigner verify` passes |
 | Release APK | builds (minified, resource-shrunk), `apksigner verify` passes |
 | APK contents | `minSdk` 34, `targetSdk` 36, label "Roadguard", ABIs arm64-v8a/armeabi-v7a/x86_64 |
-| Offline map archive | built here with planetiler; 1,133,229,927 bytes; `pmtiles verify` clean |
+| Offline map archives | all eight published packages verified: PMTiles v3, `mvt`, clustered, and every source-layer the style draws present in each |
 | No telemetry dependencies | asserted by CI on every push |
 
 **Not verified, because no device or emulator was available:**
@@ -176,10 +176,8 @@ can actually sideload. See [`docs/build.md`](docs/build.md).
 - No instrumentation tests exist; the opt-in emulator CI job currently has nothing to run.
 - **No screenshots**, because fabricating one would be a lie about the product.
 
-**One thing still needs a human:** the offline map release asset has not been published — this
-environment cannot create a GitHub release. The workflow is written and ready; somebody with
-repository access needs to run **Actions → Build offline map → Run workflow** once. Until then the
-app reports that the map package is not published, and everything else works normally.
+The offline map now installs itself on first run from published archives, with no manual step. See
+[`docs/offline-maps.md`](docs/offline-maps.md).
 
 ## Licensing
 

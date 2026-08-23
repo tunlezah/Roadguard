@@ -281,8 +281,8 @@ installed archive's absolute path.
 
 The style is cut to 18 layers. Published vector styles run to 200–324; the Moto G04's Mali-G57
 is an **MP1** part (a single shader core), and the whole road network is expressible as two
-layers using `match` on Shortbread's `kind` attribute because Shortbread guarantees z-order
-within a tile. See `docs/offline-maps.md`.
+layers using `match` on the Protomaps Basemap `kind` attribute, so width and colour select the
+road hierarchy without a layer per class. See `docs/offline-maps.md`.
 
 ## 13. UI
 

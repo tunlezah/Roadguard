@@ -32,6 +32,7 @@ data class FirstRunUiState(
     val location: LocationState = LocationState(),
     val mapInstall: MapInstallState = MapInstallState.NotInstalled,
     val mapPackage: MapPackage? = null,
+    val mapPackages: List<MapPackage> = emptyList(),
     val autoStartRecording: Boolean = true,
     val startupDelaySeconds: Int = 3,
 ) {
@@ -76,6 +77,7 @@ class FirstRunViewModel(application: Application) : AndroidViewModel(application
             location = location,
             mapInstall = mapInstall,
             mapPackage = container.mapRepository.selectedPackage,
+            mapPackages = container.mapRepository.packages,
             autoStartRecording = settings.autoStartRecording,
             startupDelaySeconds = settings.startupDelaySeconds,
         )
@@ -141,8 +143,21 @@ class FirstRunViewModel(application: Application) : AndroidViewModel(application
         container.locationEngine.start()
     }
 
+    /**
+     * Picks the region to install, and remembers it.
+     *
+     * The choice is persisted before the download starts, so a user who selects their state and
+     * then loses the app mid-download does not come back to the default region.
+     */
+    fun selectMapPackage(pack: MapPackage) {
+        if (!container.mapRepository.select(pack)) return
+        viewModelScope.launch {
+            container.settingsRepository.update { it.copy(mapPackageId = pack.id) }
+        }
+    }
+
     fun installMap() {
-        container.mapRepository.refresh()
+        container.mapRepository.refresh(container.settings.value.mapPackageId)
         container.mapRepository.install()
     }
 

@@ -38,6 +38,11 @@ object MapPackageCatalog {
                     null
                 },
                 sha256 = entry.optString("sha256").takeIf { it.isNotBlank() },
+                maxZoom = if (entry.has("maxZoom") && !entry.isNull("maxZoom")) {
+                    entry.getInt("maxZoom")
+                } else {
+                    null
+                },
                 attribution = entry.getString("attribution"),
                 licence = entry.getString("licence"),
                 coversWholeCountry = entry.optBoolean("coversWholeCountry", false),
@@ -57,6 +62,10 @@ object MapPackageCatalog {
      */
     fun defaultFor(packages: List<MapPackage>): MapPackage? =
         packages.firstOrNull { it.coversWholeCountry } ?: packages.firstOrNull()
+
+    /** The package with [id], or null. Used to restore the user's chosen region on start-up. */
+    fun byId(packages: List<MapPackage>, id: String?): MapPackage? =
+        id?.let { wanted -> packages.firstOrNull { it.id == wanted } }
 
     private const val TAG = "RoadguardMapCatalog"
 }
