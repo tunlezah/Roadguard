@@ -21,9 +21,12 @@ import io.github.tunlezah.roadguard.capability.DeviceTierAssessment
 import io.github.tunlezah.roadguard.capability.DeviceTierScorer
 import io.github.tunlezah.roadguard.capability.RecordingProfile
 import io.github.tunlezah.roadguard.capability.RecordingProfileSelector
+import android.os.SystemClock
 import io.github.tunlezah.roadguard.data.EventKind
 import io.github.tunlezah.roadguard.data.SegmentDao
 import io.github.tunlezah.roadguard.data.SegmentEntity
+import io.github.tunlezah.roadguard.event.BrakeDetector
+import io.github.tunlezah.roadguard.event.BrakeLevel
 import io.github.tunlezah.roadguard.event.EventSensorSource
 import io.github.tunlezah.roadguard.event.ImpactDetector
 import io.github.tunlezah.roadguard.event.MotionContext
@@ -158,6 +161,9 @@ class RecordingController(
     private var consecutiveFailures = 0
     private var storageCleanupRequired = false
     private var impactDetector = ImpactDetector()
+    private val brakeDetector = BrakeDetector()
+    private var brakeLevel: BrakeLevel? = null
+    private var lastBrakeFixEpochMs: Long? = null
     private var overlayJob: Job? = null
     private var sensorJob: Job? = null
     private var supervisionJob: Job? = null
@@ -194,6 +200,7 @@ class RecordingController(
             launch { powerMonitor.transitions.collect { onPowerTransition(it) } }
             launch { powerMonitor.state.collect { onBatteryState(it) } }
             launch { cameraSession.cameraError.collect { onCameraError(it) } }
+            launch { locationEngine.state.collect { onLocationState(it) } }
             launch { tickLoop() }
         }
     }
@@ -379,6 +386,9 @@ class RecordingController(
         overlayJob?.cancel()
         locationEngine.release(LocationEngine.Client.Recorder)
         sensorSource.stop()
+        brakeDetector.reset()
+        brakeLevel = null
+        lastBrakeFixEpochMs = null
         withContext(Dispatchers.Main) { cameraSession.unbind() }
         overlayEffect?.close()
         overlayEffect = null
@@ -813,6 +823,7 @@ class RecordingController(
 
     private fun onSensorSample(sample: io.github.tunlezah.roadguard.event.SensorSample) {
         if (!lastSettings.eventDetectionEnabled) return
+        brakeDetector.onSample(sample)
         val detected = impactDetector.onSample(sample) { motionContext() } ?: return
         if (!detected.accepted) return
         scope.launch {
@@ -828,6 +839,43 @@ class RecordingController(
             update { it.copy(lastProtectionMessage = result.message()) }
             delay(PROTECT_MESSAGE_MS)
             update { it.copy(lastProtectionMessage = null) }
+        }
+    }
+
+    /**
+     * Feeds the brake detector one filtered speed per fix.
+     *
+     * [LocationEngine.state] re-emits on ticks and satellite counts; deduplicating on the fix
+     * timestamp keeps the detector's slope window honest. A held speed expiring to null is fed
+     * through so the indicator goes out rather than freezing on.
+     */
+    private suspend fun onLocationState(location: io.github.tunlezah.roadguard.location.LocationState) {
+        val speed = location.speedMetresPerSecond
+        if (speed == null) {
+            if (lastBrakeFixEpochMs != null) {
+                lastBrakeFixEpochMs = null
+                brakeDetector.onSpeed(null, SystemClock.elapsedRealtime())
+            }
+        } else {
+            val fixEpochMs = location.fixEpochMs ?: return
+            if (fixEpochMs == lastBrakeFixEpochMs) return
+            lastBrakeFixEpochMs = fixEpochMs
+            brakeDetector.onSpeed(speed, SystemClock.elapsedRealtime())
+        }
+        refreshBrakeLevel()
+    }
+
+    /**
+     * Recomputes the brake level; a change republishes the overlay immediately rather than
+     * waiting out the once-a-second refresh, because braking is over in a couple of seconds.
+     * Publishing is an [java.util.concurrent.atomic.AtomicReference] set -- rasterisation still
+     * only happens when the content changed.
+     */
+    private suspend fun refreshBrakeLevel() {
+        val next = brakeDetector.level(SystemClock.elapsedRealtime())
+        if (next != brakeLevel) {
+            brakeLevel = next
+            publishOverlay()
         }
     }
 
@@ -847,6 +895,9 @@ class RecordingController(
     private suspend fun tickLoop() {
         while (scope.isActive) {
             locationEngine.tick()
+            // The tick is also what lets the brake light go out after a hold or a GNSS loss,
+            // when no new fix arrives to trigger the recomputation.
+            refreshBrakeLevel()
             delay(TICK_MS)
         }
     }
@@ -872,6 +923,7 @@ class RecordingController(
             weather = (weatherState.value as? WeatherState.Available)?.snapshot,
             nowEpochMs = System.currentTimeMillis(),
             protectedLabel = _state.value.lastProtectionMessage?.let { "PROTECTED" },
+            brake = brakeLevel,
         )
         effect.update(content)
     }

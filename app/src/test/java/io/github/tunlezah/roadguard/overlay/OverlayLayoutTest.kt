@@ -2,6 +2,7 @@ package io.github.tunlezah.roadguard.overlay
 
 import com.google.common.truth.Truth.assertThat
 import com.google.common.truth.Truth.assertWithMessage
+import io.github.tunlezah.roadguard.event.BrakeLevel
 import org.junit.Test
 
 /**
@@ -45,6 +46,7 @@ class OverlayLayoutTest {
         coordinatesText = "-33.86882, 151.20930",
         weatherText = "22°C  Partly cloudy",
         protectedLabel = "PROTECTED",
+        brake = BrakeLevel.HardBraking,
     )
 
     /** Every resolution the recorder can produce, both ways round. */
@@ -71,8 +73,8 @@ class OverlayLayoutTest {
                 checked++
             }
         }
-        // 11 frames x 63 non-empty combinations. Guards against the loop silently doing nothing.
-        assertThat(checked).isEqualTo(frames.size * 63)
+        // 11 frames x 127 non-empty combinations. Guards against the loop silently doing nothing.
+        assertThat(checked).isEqualTo(frames.size * 127)
     }
 
     @Test
@@ -248,6 +250,46 @@ class OverlayLayoutTest {
         }
     }
 
+    // ── The brake LED ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `the brake LED sits in the top-left corner when lit`() {
+        for ((width, height) in frames) {
+            val result = OverlayLayout.layout(width, height, full, metrics)
+            val led = result.led
+            assertWithMessage("${width}x$height should keep the LED").that(led).isNotNull()
+            led!!
+            assertThat(led.level).isEqualTo(BrakeLevel.HardBraking)
+            assertWithMessage("LED belongs in the left half").that(led.centerX).isLessThan(width / 2f)
+            assertWithMessage("LED belongs in the top half").that(led.centerY).isLessThan(height / 2f)
+        }
+    }
+
+    @Test
+    fun `no brake means no LED`() {
+        val result = OverlayLayout.layout(1920, 1080, full.copy(brake = null), metrics)
+        assertThat(result.led).isNull()
+    }
+
+    @Test
+    fun `the LED is sized from the shorter dimension like the text`() {
+        val landscape = OverlayLayout.layout(1920, 1080, full, metrics)
+        val portrait = OverlayLayout.layout(1080, 1920, full, metrics)
+        assertThat(portrait.led!!.radius).isWithin(0.01f).of(landscape.led!!.radius)
+        // And it really is tiny: about a couple of percent of the short side.
+        assertThat(landscape.led!!.radius).isWithin(0.01f).of(1080 * OverlayLayout.LED_RADIUS_FRACTION)
+    }
+
+    @Test
+    fun `a lit LED with no text still renders`() {
+        // Speed can expire a moment before the brake light lets go; the layout must not treat
+        // "dot only" as an empty overlay.
+        val result = OverlayLayout.layout(1920, 1080, OverlayContent(brake = BrakeLevel.Braking), metrics)
+        assertThat(result.isEmpty).isFalse()
+        assertThat(result.blocks).isEmpty()
+        assertThat(result.led).isNotNull()
+    }
+
     // ── Box arithmetic ────────────────────────────────────────────────────────────────────
 
     @Test
@@ -294,10 +336,20 @@ class OverlayLayoutTest {
                     .isFalse()
             }
         }
+        result.led?.let { led ->
+            assertWithMessage("$label: LED ${led.box} escapes ${width}x$height")
+                .that(led.box.isInside(width.toFloat(), height.toFloat()))
+                .isTrue()
+            result.blocks.forEach { block ->
+                assertWithMessage("$label: LED ${led.box} overlaps ${block.id} ${block.scrim}")
+                    .that(block.scrim.overlaps(led.box))
+                    .isFalse()
+            }
+        }
     }
 
-    /** All 64 on/off combinations of the six overlay fields. */
-    private fun allContentCombinations(): List<OverlayContent> = (0 until 64).map { mask ->
+    /** All 128 on/off combinations of the seven overlay fields. */
+    private fun allContentCombinations(): List<OverlayContent> = (0 until 128).map { mask ->
         OverlayContent(
             dateText = full.dateText.takeIf { mask and 1 != 0 },
             timeText = full.timeText.takeIf { mask and 2 != 0 },
@@ -305,6 +357,7 @@ class OverlayLayoutTest {
             coordinatesText = full.coordinatesText.takeIf { mask and 8 != 0 },
             weatherText = full.weatherText.takeIf { mask and 16 != 0 },
             protectedLabel = full.protectedLabel.takeIf { mask and 32 != 0 },
+            brake = full.brake.takeIf { mask and 64 != 0 },
         )
     }
 }

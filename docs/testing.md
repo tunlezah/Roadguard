@@ -15,7 +15,7 @@
 ./gradlew :app:testDebugUnitTest
 ```
 
-**416 tests. 0 failures. 0 errors. 0 skipped.** About 35 seconds of test execution on a warm
+**444 tests. 0 failures. 0 errors. 0 skipped.** About 35 seconds of test execution on a warm
 build.
 
 | Suite | Tests | What it holds in place |
@@ -57,7 +57,7 @@ all answered by code that is exhaustively exercised on every push.
 
 ## 3. Compose UI tests that run on the JVM
 
-67 of the 416 are real Compose UI tests: they compose the production composables, read the
+67 of the 444 are real Compose UI tests: they compose the production composables, read the
 semantics tree, and perform clicks. They live in `src/test` under Robolectric rather than in
 `src/androidTest`, which is a deliberate trade:
 

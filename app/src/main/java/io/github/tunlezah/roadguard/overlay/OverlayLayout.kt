@@ -1,5 +1,6 @@
 package io.github.tunlezah.roadguard.overlay
 
+import io.github.tunlezah.roadguard.event.BrakeLevel
 import kotlin.math.max
 import kotlin.math.min
 
@@ -70,14 +71,35 @@ object OverlayLayout {
         Stacked,
     }
 
+    /**
+     * The brake indicator LED: a small dot in the top-left corner.
+     *
+     * [radius] is the lit body; the collision box reserved for it extends to the glow radius
+     * ([OverlayLayout.LED_GLOW_FACTOR] x [radius]) so hard braking's halo cannot touch a label.
+     */
+    data class Led(
+        val centerX: Float,
+        val centerY: Float,
+        val radius: Float,
+        val level: BrakeLevel,
+    ) {
+        val box: Box
+            get() {
+                val reach = radius * LED_GLOW_FACTOR
+                return Box(centerX - reach, centerY - reach, centerX + reach, centerY + reach)
+            }
+    }
+
     data class Result(
         val blocks: List<Block>,
         val arrangement: Arrangement,
         val scale: Float,
         /** False when even the smallest layout could not be made to fit; see [layout]. */
         val fits: Boolean,
+        /** The brake LED, or null when unlit -- or dropped because no layout had room for it. */
+        val led: Led? = null,
     ) {
-        val isEmpty: Boolean get() = blocks.isEmpty()
+        val isEmpty: Boolean get() = blocks.isEmpty() && led == null
     }
 
     /** Text measurement, injected so the layout can be tested without a `Paint`. */
@@ -113,11 +135,27 @@ object OverlayLayout {
             return Result(emptyList(), Arrangement.SideBySide, 1f, fits = true)
         }
 
+        val led = content.brake?.let { ledFor(frameWidth, frameHeight, it) }
+
         for (scale in SCALES) {
             for (arrangement in Arrangement.entries) {
                 val candidate = build(frameWidth, frameHeight, content, metrics, scale, arrangement)
-                if (isValid(candidate, frameWidth, frameHeight)) {
-                    return Result(candidate, arrangement, scale, fits = true)
+                if (isValid(candidate, led, frameWidth, frameHeight)) {
+                    return Result(candidate, arrangement, scale, fits = true, led = led)
+                }
+            }
+        }
+
+        // The text could not be made to fit alongside the LED. The LED is the least important
+        // element on the frame, so it is the one that goes: retry the search without it before
+        // shrinking anything further.
+        if (led != null) {
+            for (scale in SCALES) {
+                for (arrangement in Arrangement.entries) {
+                    val candidate = build(frameWidth, frameHeight, content, metrics, scale, arrangement)
+                    if (isValid(candidate, frameWidth, frameHeight)) {
+                        return Result(candidate, arrangement, scale, fits = true)
+                    }
                 }
             }
         }
@@ -126,6 +164,29 @@ object OverlayLayout {
         // large is recoverable evidence, an absent one is not.
         val fallback = build(frameWidth, frameHeight, content, metrics, MIN_SCALE, Arrangement.Stacked)
         return Result(fallback, Arrangement.Stacked, MIN_SCALE, fits = false)
+    }
+
+    /** The LED's place and size: top-left corner, sized from the shorter frame dimension. */
+    private fun ledFor(frameWidth: Int, frameHeight: Int, level: BrakeLevel): Led {
+        val base = min(frameWidth, frameHeight).toFloat()
+        val margin = base * MARGIN_FRACTION
+        val radius = base * LED_RADIUS_FRACTION
+        val reach = radius * LED_GLOW_FACTOR
+        return Led(
+            centerX = margin + reach,
+            centerY = margin + reach,
+            radius = radius,
+            level = level,
+        )
+    }
+
+    /** [isValid], additionally requiring the LED's reserved box to fit and touch nothing. */
+    fun isValid(blocks: List<Block>, led: Led?, frameWidth: Int, frameHeight: Int): Boolean {
+        if (!isValid(blocks, frameWidth, frameHeight)) return false
+        if (led == null) return true
+        val box = led.box
+        if (!box.isInside(frameWidth.toFloat(), frameHeight.toFloat())) return false
+        return blocks.none { it.scrim.overlaps(box) }
     }
 
     /** True when no two blocks intersect and every block is inside the frame. */
@@ -316,4 +377,15 @@ object OverlayLayout {
     val SCALES: List<Float> = listOf(1.0f, 0.92f, 0.84f, 0.76f, 0.68f, 0.60f, MIN_SCALE)
 
     const val MIN_SCALE = 0.52f
+
+    /**
+     * Brake LED body radius, as a fraction of the shorter dimension.
+     *
+     * About a 24 px dot on a 1080p frame -- deliberately tiny. It is an annotation in the
+     * corner of evidence footage, not a warning lamp for the driver, who has a windscreen.
+     */
+    const val LED_RADIUS_FRACTION = 0.011f
+
+    /** The glow (and reserved collision box) extends this factor beyond the body radius. */
+    const val LED_GLOW_FACTOR = 2.2f
 }

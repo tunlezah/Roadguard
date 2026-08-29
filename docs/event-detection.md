@@ -217,3 +217,54 @@ saying "keep this", and that judgement outranks any classifier.
 | Boundary-straddling events protect both segments; in-progress segments count only to *now*; crash-interrupted events are recoverable | **Verified** — `ProtectionPlannerTest`, 25 JVM tests, passing |
 | The thresholds are right for a real vehicle | **Not verified.** No vehicle, no phone, no drive traces. This is reasoning |
 | Detection latency and protection under a real impact | **Not verified.** No device was available |
+| The brake indicator engages, escalates, holds, releases and expires as specified, across normal and thermally degraded fix rates | **Verified** — `BrakeDetectorTest`, 20 JVM tests, passing |
+| The brake LED participates in the overlay's no-overlap guarantee and obeys the GPS overlay gates | **Verified** — `OverlayLayoutTest`, `OverlayComposerTest`, passing |
+| The brake thresholds are right for a real vehicle | **Not verified**, same as every threshold above |
+
+## 11. The brake indicator
+
+A tiny red LED burned into the top-left corner of the video while the vehicle is braking, with
+a soft halo when it is braking hard. It exists to annotate footage — "the driver was on the
+brakes here" — and nothing else:
+
+* **It never protects footage.** No event row, no sidecar, no interaction with the loop, the
+  planner or the coordinator. §4's hard-braking *protection* classification is a separate
+  (currently unreachable — see `ImpactDetectorTest`) path and is untouched.
+* **It adds no sensor, no wakeup and no measurable cost.** It consumes the accelerometer stream
+  and the GNSS fixes that already flow while recording. `BrakeDetectorTest` pushes an hour of
+  drive input — 360,000 accelerometer samples and 3,600 fixes — through the detector as a
+  throughput test; it completes in tens of milliseconds on a build machine, i.e. the detector
+  costs on the order of 0.001% of one core. The LED itself re-rasterises the overlay only when
+  the light changes, exactly like every other overlay field.
+
+### How it decides
+
+GNSS decides; the accelerometer only assists. A cradled phone does not know which way the
+vehicle points, so horizontal acceleration alone cannot tell braking from hard acceleration or
+a firm corner — but the sign of the speed change can. `BrakeDetector` measures the steepest
+deceleration ending at the newest filtered speed (`SpeedFilter` output), gated on the newest
+pair of fixes still showing deceleration:
+
+| | Engage | Release |
+| --- | --- | --- |
+| **Braking** | ≥ 1.5 m/s² (0.15 g, ≈ 5.4 km/h lost per second) | 60% of engage |
+| **Hard braking** | ≥ 3.9 m/s² (0.40 g, the conventional telematics figure) | 60% of engage |
+
+A sustained horizontal acceleration of ≥ 0.40 g may escalate a GNSS-confirmed *Braking* to
+*HardBraking* — it can never light the indicator alone. Once evidence stops supporting a level
+the light holds it for 1.2 s, so one flat or lost fix cannot blink it and the once-a-second
+overlay refresh shows a steady light. A level change republishes the overlay immediately rather
+than waiting out the refresh.
+
+The measurement survives the thermal engine slowing fixes to 2 s or 5 s (the slope pair just
+gets longer), and no usable speed — tunnel, car park, location off — simply means no light.
+
+### Gates and honesty
+
+The light obeys exactly the gates the speed field obeys: the GPS storage mode must allow
+overlay use and the speed overlay must be on. There is deliberately no separate setting.
+
+Like every number in this document, the thresholds are reasoned from published telematics
+figures, **not** measured from a real drive — and unlike the impact detector, a false positive
+here costs a 24-pixel dot on one second of footage, not protected storage. That asymmetry is
+why the indicator engages at 0.15 g while protection holds out for far stronger evidence.

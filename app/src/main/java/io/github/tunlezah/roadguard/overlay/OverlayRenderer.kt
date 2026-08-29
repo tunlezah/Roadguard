@@ -5,10 +5,13 @@ import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PorterDuff
+import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.Shader
 import android.graphics.Typeface
 import androidx.core.graphics.withMatrix
+import io.github.tunlezah.roadguard.event.BrakeLevel
 
 /**
  * Draws the burned-in overlay onto a camera frame's overlay canvas.
@@ -63,6 +66,20 @@ class OverlayRenderer {
     }
     private val scratch = RectF()
 
+    // LED paints. The glow's shader depends on the LED's position and radius, so it is set at
+    // draw time -- which is at most once per content change, and only while actually braking.
+    private val ledBodyPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val ledRimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = Color.BLACK
+        alpha = LED_RIM_ALPHA
+    }
+    private val ledHighlightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        alpha = LED_HIGHLIGHT_ALPHA
+    }
+    private val ledGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
     /** Measures with the same paint that will draw, so layout and rendering cannot disagree. */
     private val metrics = object : OverlayLayout.Metrics {
         private val measuring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -116,7 +133,47 @@ class OverlayRenderer {
         // the GL thread and a leaked transform would corrupt every later frame.
         canvas.withMatrix(matrix) {
             layout.blocks.forEach { block -> drawBlock(this, block) }
+            layout.led?.let { drawLed(this, it) }
         }
+    }
+
+    /**
+     * The brake indicator: a tiny, glossy red dot.
+     *
+     * Drawn the way a hardware status LED looks -- a saturated body, a hairline dark rim so it
+     * reads over a bright sky, and a small offset highlight for the lens. Hard braking adds a
+     * soft halo; ordinary braking is just the dot. Nothing pulses, because the overlay is only
+     * re-rasterised when its content changes.
+     */
+    private fun drawLed(canvas: Canvas, led: OverlayLayout.Led) {
+        val radius = led.radius
+        if (led.level == BrakeLevel.HardBraking) {
+            val reach = radius * OverlayLayout.LED_GLOW_FACTOR
+            ledGlowPaint.shader = RadialGradient(
+                led.centerX,
+                led.centerY,
+                reach,
+                intArrayOf(LED_GLOW_COLOUR, LED_GLOW_COLOUR and 0x00FFFFFF),
+                floatArrayOf(radius / reach, 1f),
+                Shader.TileMode.CLAMP,
+            )
+            canvas.drawCircle(led.centerX, led.centerY, reach, ledGlowPaint)
+            ledGlowPaint.shader = null
+        }
+
+        ledBodyPaint.color = if (led.level == BrakeLevel.HardBraking) LED_HARD_COLOUR else LED_COLOUR
+        canvas.drawCircle(led.centerX, led.centerY, radius, ledBodyPaint)
+
+        ledRimPaint.strokeWidth = radius * LED_RIM_WIDTH_FRACTION
+        canvas.drawCircle(led.centerX, led.centerY, radius, ledRimPaint)
+
+        val highlightOffset = radius * LED_HIGHLIGHT_OFFSET_FRACTION
+        canvas.drawCircle(
+            led.centerX - highlightOffset,
+            led.centerY - highlightOffset,
+            radius * LED_HIGHLIGHT_RADIUS_FRACTION,
+            ledHighlightPaint,
+        )
     }
 
     /**
@@ -158,6 +215,21 @@ class OverlayRenderer {
         const val SHADOW_ALPHA = 150
 
         const val SHADOW_OFFSET_FRACTION = 0.055f
+
+        /** Brake LED body: the red a status light uses, fully saturated but not neon. */
+        const val LED_COLOUR = 0xFFFF3B30.toInt()
+
+        /** Hard braking brightens the body a step alongside the halo. */
+        const val LED_HARD_COLOUR = 0xFFFF453A.toInt()
+
+        /** Halo colour at the body's edge; it fades to transparent at the glow radius. */
+        const val LED_GLOW_COLOUR = 0x8CFF3B30.toInt()
+
+        const val LED_RIM_ALPHA = 64
+        const val LED_RIM_WIDTH_FRACTION = 0.10f
+        const val LED_HIGHLIGHT_ALPHA = 70
+        const val LED_HIGHLIGHT_OFFSET_FRACTION = 0.32f
+        const val LED_HIGHLIGHT_RADIUS_FRACTION = 0.42f
 
         /** Size of the frame as a viewer will see it, after rotation. */
         fun displaySize(cropRect: Rect, rotationDegrees: Int): Pair<Int, Int> =
