@@ -1,5 +1,6 @@
 package io.github.tunlezah.roadguard.overlay
 
+import io.github.tunlezah.roadguard.event.BrakeLevel
 import io.github.tunlezah.roadguard.location.LocationState
 import io.github.tunlezah.roadguard.settings.Settings
 import io.github.tunlezah.roadguard.weather.WeatherSnapshot
@@ -29,6 +30,7 @@ class OverlayComposer(
         weather: WeatherSnapshot?,
         nowEpochMs: Long,
         protectedLabel: String? = null,
+        brake: BrakeLevel? = null,
     ): OverlayContent {
         val showCoordinates = settings.overlayCoordinates && settings.gpsStorage.overlay
         val showSpeed = settings.overlaySpeed && settings.gpsStorage.overlay
@@ -47,6 +49,9 @@ class OverlayComposer(
                 null
             },
             protectedLabel = protectedLabel,
+            // The brake light is derived from GNSS speed, so it obeys the same gates as the
+            // speed field: no GPS in the overlay means no GPS-derived light either.
+            brake = if (showSpeed) brake else null,
         )
     }
 }
