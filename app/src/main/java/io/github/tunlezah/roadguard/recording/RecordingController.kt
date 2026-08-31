@@ -150,9 +150,14 @@ class RecordingController(
     private var lifecycleOwner: LifecycleOwner? = null
     private var overlayEffect: VideoOverlayEffect? = null
     private var activeRecording: Recording? = null
-    private var activeSegmentId: Long? = null
-    private var activeSegmentStartedAtEpochMs: Long = 0L
-    private var activeSegmentFileName: String? = null
+
+    // Written from the controller's coroutines and read from the recorder executor's event
+    // callbacks, so both need the cross-thread visibility guarantee.
+    @Volatile
+    private var activeSegment: SegmentHandle? = null
+
+    @Volatile
+    private var startQueued = false
     private var sequence: Long = 0L
     private var boundProfile: RecordingProfile? = null
     private var pendingProfile: RecordingProfile? = null
@@ -408,6 +413,8 @@ class RecordingController(
 
     @SuppressLint("MissingPermission")
     private suspend fun startSegment(settings: Settings, profile: RecordingProfile) {
+        startQueued = false
+        if (stopRequested) return
         val recorder = cameraSession.recorder ?: run {
             update { it.copy(status = RecorderStatus.Failed, lastErrorMessage = "The recorder is not available") }
             return
@@ -454,14 +461,23 @@ class RecordingController(
         val pending = recorder.prepareRecording(context, outputBuilder.build())
         if (settings.microphoneEnabled && hasMicrophonePermission()) pending.withAudioEnabled()
 
-        activeSegmentId = segmentId
-        activeSegmentStartedAtEpochMs = startedAt
-        activeSegmentFileName = file.name
+        // Everything an event handler needs to know about this recording is captured here and
+        // carried by the callback closure. CameraX events do not identify their recording, and
+        // the next segment is started while the previous one is still finalising, so state read
+        // back from shared fields inside a handler can belong to the wrong segment.
+        val handle = SegmentHandle(segmentId, startedAt)
+        activeSegment = handle
 
         val recording = runCatching {
-            pending.start(recorderExecutor) { event -> onRecordEvent(event) }
+            pending.start(recorderExecutor) { event -> onRecordEvent(handle, event) }
         }.getOrElse { throwable ->
             Log.e(TAG, "could not start a segment", throwable)
+            // The row was indexed for a file that will now never be written; without this it
+            // sits in the gallery forever as a missing file.
+            if (segmentId != null) {
+                withContext(Dispatchers.IO) { runCatching { segments.deleteById(segmentId) } }
+            }
+            if (activeSegment === handle) activeSegment = null
             update {
                 it.copy(status = RecorderStatus.Failed, lastErrorMessage = "Recording could not be started")
             }
@@ -481,11 +497,17 @@ class RecordingController(
         }
     }
 
-    private fun onRecordEvent(event: VideoRecordEvent) {
+    private fun onRecordEvent(handle: SegmentHandle, event: VideoRecordEvent) {
         when (event) {
             is VideoRecordEvent.Start -> consecutiveFailures = 0
 
             is VideoRecordEvent.Status -> {
+                // A recording that has been told to stop can still deliver a Status or two while
+                // it drains. Those must not update the UI for its successor, and above all must
+                // not trip the rollover check again: the previous segment's elapsed time is past
+                // the target by definition, so acting on it would stop the new recording seconds
+                // after it began.
+                if (handle !== activeSegment) return
                 val stats = event.recordingStats
                 val elapsedMs = stats.recordedDurationNanos / 1_000_000
                 update {
@@ -495,10 +517,10 @@ class RecordingController(
                             androidx.camera.video.AudioStats.AUDIO_STATE_MUTED,
                     )
                 }
-                maybeRollOver(elapsedMs)
+                maybeRollOver(handle, elapsedMs)
             }
 
-            is VideoRecordEvent.Finalize -> scope.launch { onFinalize(event) }
+            is VideoRecordEvent.Finalize -> scope.launch { onFinalize(handle, event) }
 
             else -> Unit
         }
@@ -512,7 +534,8 @@ class RecordingController(
      * When a rebind is pending the new recording is *not* queued here -- it has to wait for the
      * camera to be reconfigured in [onFinalize].
      */
-    private fun maybeRollOver(elapsedMs: Long) {
+    private fun maybeRollOver(handle: SegmentHandle, elapsedMs: Long) {
+        if (handle !== activeSegment) return
         if (_state.value.status != RecorderStatus.Recording) return
         val settings = lastSettings
         val decision = SegmentPlanner.decide(
@@ -531,22 +554,28 @@ class RecordingController(
         val recording = activeRecording ?: return
         recording.stop()
         activeRecording = null
-        if (!rebindPending && !stopRequested) {
+        val profile = boundProfile
+        if (!rebindPending && !stopRequested && profile != null) {
             // Queue the next segment immediately; the recorder services it on finalise.
-            scope.launch { startSegment(settings, boundProfile ?: return@launch) }
+            // startQueued stops the finalise handler from starting a second one in parallel.
+            startQueued = true
+            scope.launch { startSegment(settings, profile) }
         }
     }
 
-    private suspend fun onFinalize(event: VideoRecordEvent.Finalize) {
-        val segmentId = activeSegmentId
-        val fileName = activeSegmentFileName
-        val startedAt = activeSegmentStartedAtEpochMs
+    private suspend fun onFinalize(handle: SegmentHandle, event: VideoRecordEvent.Finalize) {
         val stats = event.recordingStats
         val durationMs = stats.recordedDurationNanos / 1_000_000
-        activeSegmentId = null
-        activeSegmentFileName = null
+        if (handle === activeSegment) {
+            // No successor has been started, so nothing is recording now (a stop, or the
+            // duration backstop). When a rollover already queued the next segment these fields
+            // describe that segment and must be left alone.
+            activeSegment = null
+            activeRecording = null
+        }
 
-        if (segmentId != null && fileName != null) {
+        val segmentId = handle.segmentId
+        if (segmentId != null) {
             withContext(Dispatchers.IO) {
                 segments.byId(segmentId)?.let { entity ->
                     val file = storage.segmentFile(entity)
@@ -563,12 +592,12 @@ class RecordingController(
                             ),
                         )
                         protection.onSegmentFinalised(
-                            SegmentTiming(entity.id, startedAt, durationMs),
+                            SegmentTiming(entity.id, handle.startedAtEpochMs, durationMs),
                             entity.fileName,
                         )
                     } else {
                         // Nothing usable: quarantine rather than delete, and drop the row.
-                        storage.quarantine(file)
+                        if (file.exists()) storage.quarantine(file)
                         segments.deleteById(entity.id)
                     }
                 }
@@ -607,7 +636,9 @@ class RecordingController(
 
         // The queued start from maybeRollOver normally covers this; if it did not (for example the
         // recorder rejected the queued start), start one now so the loop cannot silently stall.
-        if (activeRecording == null && _state.value.status != RecorderStatus.Idle) {
+        // startQueued means that start is still on its way: starting here too would race it and
+        // index a second row for a recording the recorder will refuse.
+        if (!startQueued && activeRecording == null && _state.value.status != RecorderStatus.Idle) {
             boundProfile?.let { startSegment(lastSettings, it) }
         }
     }
@@ -929,11 +960,12 @@ class RecordingController(
     }
 
     private fun currentSegmentTiming(): SegmentTiming? {
-        val id = activeSegmentId ?: return null
+        val segment = activeSegment ?: return null
+        val id = segment.segmentId ?: return null
         return SegmentTiming(
             id = id,
-            startedAtEpochMs = activeSegmentStartedAtEpochMs,
-            durationMs = (System.currentTimeMillis() - activeSegmentStartedAtEpochMs).coerceAtLeast(0),
+            startedAtEpochMs = segment.startedAtEpochMs,
+            durationMs = (System.currentTimeMillis() - segment.startedAtEpochMs).coerceAtLeast(0),
             isInProgress = true,
         )
     }
@@ -971,6 +1003,21 @@ class RecordingController(
 
     /** A blocker plus whether it actually prevents recording, as opposed to degrading it. */
     private data class BlockerCheck(val blocker: RecordingBlocker, val blocksRecording: Boolean)
+
+    /**
+     * The identity of one recording, captured by that recording's event callback closure.
+     *
+     * The rollover path stops a recording and starts the next one back to back, so events from
+     * the two overlap: the old recording's Finalize (and sometimes a last Status) arrives after
+     * the new segment's row has been indexed. Each callback carrying its own handle is what lets
+     * a finalise update the row it actually recorded into, rather than whichever row happens to
+     * be newest -- misattributing it deleted the new row, left the finished one marked
+     * incomplete, and sent perfectly good footage to quarantine on the next start.
+     */
+    private class SegmentHandle(
+        val segmentId: Long?,
+        val startedAtEpochMs: Long,
+    )
 
     /** Storage assessment, republished for the UI. */
     val storageAssessment: StateFlow<StorageAssessment?> get() = storage.assessment

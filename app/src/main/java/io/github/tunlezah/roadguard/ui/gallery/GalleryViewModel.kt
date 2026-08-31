@@ -9,12 +9,15 @@ import io.github.tunlezah.roadguard.core.RoadguardContainer
 import io.github.tunlezah.roadguard.data.EventEntity
 import io.github.tunlezah.roadguard.data.SegmentEntity
 import io.github.tunlezah.roadguard.data.EventKind
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -32,8 +35,15 @@ data class GalleryItem(
     val segment: SegmentEntity,
     val file: File,
     val event: EventEntity?,
+    /**
+     * Resolved once, off the main thread, when the list is built. A getter here would stat the
+     * disk several times per row per frame, which with thousands of rows is what an ANR is
+     * made of.
+     */
+    val exists: Boolean,
+    /** Preformatted start time, so a row never builds a date formatter during composition. */
+    val timeLabel: String,
 ) {
-    val exists: Boolean get() = file.exists()
     val isProtected: Boolean get() = segment.isProtected
 }
 
@@ -69,16 +79,23 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val state: StateFlow<GalleryUiState> = combine(
         segments.observeAll(),
         events.observeAll(),
+        // Re-resolve every path when the storage volume changes: rows mapped before the
+        // persisted volume was applied at start-up would otherwise stay "missing" forever.
+        container.storageManager.layoutGeneration,
         filter,
         message,
-    ) { allSegments, allEvents, activeFilter, activeMessage ->
+    ) { allSegments, allEvents, _, activeFilter, activeMessage ->
         val eventsById = allEvents.associateBy { it.id }
+        val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
         val items = allSegments
             .map { segment ->
+                val file = container.storageManager.segmentFile(segment)
                 GalleryItem(
                     segment = segment,
-                    file = container.storageManager.segmentFile(segment),
+                    file = file,
                     event = segment.eventId?.let { eventsById[it] },
+                    exists = file.exists(),
+                    timeLabel = timeFormat.format(Date(segment.startedAtEpochMs)),
                 )
             }
             .filter { item ->
@@ -94,11 +111,15 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             totalCount = allSegments.size,
             message = activeMessage,
         )
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = GalleryUiState(),
-    )
+    }
+        // Thousands of rows mean thousands of File.exists() calls per rebuild; that work, and
+        // the grouping behind it, must never run on the main thread.
+        .flowOn(Dispatchers.IO)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = GalleryUiState(),
+        )
 
     fun setFilter(value: GalleryFilter) {
         filter.value = value
@@ -142,7 +163,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             return@launch
         }
         val file = container.storageManager.segmentFile(segment)
-        val removed = !file.exists() || file.delete()
+        val removed = withContext(Dispatchers.IO) { !file.exists() || file.delete() }
         if (removed) {
             segments.deleteById(segmentId)
             message.value = "Deleted"
@@ -151,24 +172,20 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private fun groupByDay(items: List<GalleryItem>): List<GalleryDay> =
-        items.groupBy { dayLabel(it.segment.startedAtEpochMs) }
+    /**
+     * Date formatters are built once per list rebuild rather than held in a field or created
+     * per item. Per field, a formatter that captures `Locale.getDefault()` once would keep
+     * formatting in the old locale for the life of the process if the user changes their
+     * language; per item, a list of thousands of segments would allocate thousands of them
+     * on every update.
+     */
+    private fun groupByDay(items: List<GalleryItem>): List<GalleryDay> {
+        val dayFormat = SimpleDateFormat("EEEE d MMMM yyyy", Locale.getDefault())
+        return items.groupBy { dayFormat.format(Date(it.segment.startedAtEpochMs)) }
             .map { (label, dayItems) -> GalleryDay(label, dayItems) }
+    }
 
     companion object {
-        /**
-         * Date formatters are built per call rather than held in a field.
-         *
-         * A formatter that captures `Locale.getDefault()` once keeps formatting in the old locale
-         * for the life of the process if the user changes their language, which on a long-lived
-         * foreground app is a real possibility rather than a theoretical one.
-         */
-        fun dayLabel(epochMs: Long): String =
-            SimpleDateFormat("EEEE d MMMM yyyy", Locale.getDefault()).format(Date(epochMs))
-
-        fun timeLabel(epochMs: Long): String =
-            SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(epochMs))
-
         val Factory: ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(
