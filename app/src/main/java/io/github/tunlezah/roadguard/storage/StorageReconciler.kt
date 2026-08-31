@@ -33,6 +33,22 @@ class StorageReconciler(
 ) {
 
     suspend fun reconcile(): ReconcileReport = withContext(Dispatchers.IO) {
+        // With the chosen volume unmounted, every row would compare against the fallback volume
+        // and look deleted. Dropping thousands of index rows because a card was slow to mount
+        // (or briefly ejected) is exactly the kind of loss this pass exists to prevent, so it
+        // stands down instead.
+        if (storage.requestedVolumeMissing) {
+            return@withContext ReconcileReport(
+                repairedIncomplete = 0,
+                quarantined = 0,
+                droppedRows = 0,
+                adoptedFiles = 0,
+                reprotected = 0,
+                closedEvents = 0,
+                notes = listOf("the chosen recording volume is not mounted; nothing was checked"),
+            ).also { Log.w(TAG, "reconcile skipped: recording volume is not mounted") }
+        }
+
         val layout = storage.layout
         layout.ensureDirectories()
 
@@ -205,7 +221,7 @@ data class ReconcileReport(
         get() = repairedIncomplete + quarantined + droppedRows + adoptedFiles + reprotected + closedEvents > 0
 
     fun summary(): String = if (!changedAnything) {
-        "Storage was consistent"
+        notes.firstOrNull() ?: "Storage was consistent"
       } else {
         buildList {
             if (repairedIncomplete > 0) add("$repairedIncomplete recovered")

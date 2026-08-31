@@ -28,6 +28,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.concurrent.Executors
@@ -77,11 +78,12 @@ class RoadguardContainer(private val appContext: Context) {
 
     val database: RoadguardDatabase by lazy { RoadguardDatabase.create(appContext) }
 
-    val storageManager: StorageManager by lazy {
-        StorageManager(appContext, database.segments()).also {
-            it.useVolume(settings.value.storageVolumeId)
-        }
-    }
+    /**
+     * Uses the primary volume until [onApplicationCreate] has loaded the persisted choice.
+     * Deliberately not initialised from [settings] here: that snapshot is the compiled-in
+     * default until DataStore's first read completes, so it cannot be trusted for the volume.
+     */
+    val storageManager: StorageManager by lazy { StorageManager(appContext, database.segments()) }
 
     val storageReconciler: StorageReconciler by lazy {
         StorageReconciler(storageManager, database.segments(), database.events())
@@ -189,11 +191,14 @@ class RoadguardContainer(private val appContext: Context) {
      */
     fun onApplicationCreate() {
         applicationScope.launch {
-            storageManager.useVolume(settings.value.storageVolumeId)
+            // Wait for the settings actually persisted on disk. The hot [settings] StateFlow
+            // reports the compiled-in defaults until DataStore's first read lands, and those
+            // defaults say "internal storage": reconciling against the wrong volume would treat
+            // every file on the chosen one as gone and drop its index rows.
+            val loaded = settingsRepository.settings.first()
+            storageManager.useVolume(loaded.storageVolumeId)
             runCatching { storageReconciler.reconcile() }
-        }
-        applicationScope.launch {
-            runCatching { storageManager.refresh(settings.value.loopBudgetBytes) }
+            runCatching { storageManager.refresh(loaded.loopBudgetBytes) }
         }
     }
 

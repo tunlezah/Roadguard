@@ -94,10 +94,7 @@ fun PlayerScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        item?.segment?.let { GalleryViewModel.timeLabel(it.startedAtEpochMs) }
-                            ?: "Recording",
-                    )
+                    Text(item?.timeLabel ?: "Recording")
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {

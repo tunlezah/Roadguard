@@ -207,7 +207,7 @@ private fun SegmentRow(
 
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = GalleryViewModel.timeLabel(segment.startedAtEpochMs),
+                text = item.timeLabel,
                 style = MaterialTheme.typography.bodyLarge,
             )
             Text(

@@ -34,9 +34,31 @@ class StorageManager(
     var layout: StorageLayout = StorageLayout.forVolume(context, null)
         private set
 
+    private val _layoutGeneration = MutableStateFlow(0)
+
+    /**
+     * Bumped whenever [useVolume] changes where files resolve to, so anything that has already
+     * turned index rows into paths (the gallery, above all) knows to resolve them again. Without
+     * it, a list built before the persisted volume was applied keeps reporting every file as
+     * missing until something else happens to rebuild it.
+     */
+    val layoutGeneration: StateFlow<Int> = _layoutGeneration.asStateFlow()
+
+    /**
+     * True when the volume the user chose was not mounted at the last [useVolume], and [layout]
+     * is the primary-volume fallback. The reconciler must not judge rows against the fallback:
+     * every file on the chosen card would look deleted.
+     */
+    @Volatile
+    var requestedVolumeMissing: Boolean = false
+        private set
+
     fun useVolume(volumeId: String?) {
+        requestedVolumeMissing = volumeId != null &&
+            StorageLayout.availableVolumes(context).none { StorageLayout.volumeIdOf(it) == volumeId }
         layout = StorageLayout.forVolume(context, volumeId)
         layout.ensureDirectories()
+        _layoutGeneration.value += 1
     }
 
     /** Volumes the user may choose between, with their sizes, for the storage screen. */
