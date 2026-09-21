@@ -18,8 +18,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -27,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -75,17 +81,28 @@ import kotlinx.coroutines.delay
  * the MP4 never got its index). Both are checked before the player is built, and reported plainly,
  * because "the video player crashed" tells the user nothing useful about footage they may have been
  * counting on.
+ *
+ * ### The clip is shown inside its trip
+ *
+ * The title is the trip's name, the subtitle says which clip of how many this is, and the card
+ * below the video carries the trip's track and a way back to its clips. Previous and next step
+ * through the trip in playing order without going back to the list.
+ *
+ * @param onOpenSegment replaces this screen with another clip of the same trip.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(
     segmentId: Long,
     onBack: () -> Unit,
+    onOpenSegment: (Long) -> Unit,
+    onOpenTrack: (java.io.File) -> Unit,
     modifier: Modifier = Modifier,
     viewModel: GalleryViewModel = viewModel(factory = GalleryViewModel.Factory),
 ) {
     val state by viewModel.state.collectAsState()
     val item = remember(segmentId, state) { viewModel.itemFor(segmentId) }
+    val position = remember(segmentId, state) { viewModel.positionOf(segmentId) }
     val context = LocalContext.current
     val status = LocalRoadguardStatusColors.current
 
@@ -94,7 +111,20 @@ fun PlayerScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(item?.timeLabel ?: "Recording")
+                    Column {
+                        Text(
+                            text = position?.trip?.title ?: item?.timeLabel ?: "Recording",
+                            style = MaterialTheme.typography.titleLarge,
+                            maxLines = 1,
+                        )
+                        if (position != null && item != null) {
+                            Text(
+                                text = "Clip ${position.index + 1} of ${position.count}  ·  ${item.timeLabel}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -178,8 +208,98 @@ fun PlayerScreen(
                     } else {
                         VideoPlayer(item = item, modifier = Modifier.fillMaxWidth().weight(1f))
                         SegmentDetails(item = item, modifier = Modifier.fillMaxWidth())
+                        position?.let { current ->
+                            TripContext(
+                                position = current,
+                                onOpenTrack = onOpenTrack,
+                                onAllClips = onBack,
+                                onOpenSegment = onOpenSegment,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
                     }
                 }
+            }
+        }
+    }
+}
+
+/** The trip a clip belongs to, with its track and its neighbours. */
+@Composable
+private fun TripContext(
+    position: ClipPosition,
+    onOpenTrack: (java.io.File) -> Unit,
+    onAllClips: () -> Unit,
+    onOpenSegment: (Long) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val trip = position.trip
+    Column(modifier = modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (trip.trip != null) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "THIS TRIP",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        RouteThumbnail(points = trip.sketch, recording = trip.isRecording, modifier = Modifier.size(44.dp))
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(text = trip.title, style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                text = trip.meta,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilledTonalButton(
+                            onClick = { trip.trackFile?.let(onOpenTrack) },
+                            enabled = trip.trackFile != null,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Icon(painterResource(R.drawable.ic_map), contentDescription = null, modifier = Modifier.size(18.dp))
+                            Text("  Open track")
+                        }
+                        OutlinedButton(onClick = onAllClips, modifier = Modifier.weight(1f)) {
+                            Text("All ${position.count} clips")
+                        }
+                    }
+                }
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(
+                onClick = { position.previousSegmentId?.let(onOpenSegment) },
+                enabled = position.previousSegmentId != null,
+            ) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = null)
+                Text(
+                    position.previousSegmentId?.let { id ->
+                        trip.items.firstOrNull { it.segment.id == id }?.let { "Previous ${it.timeLabel}" }
+                    } ?: "First clip",
+                )
+            }
+            TextButton(
+                onClick = { position.nextSegmentId?.let(onOpenSegment) },
+                enabled = position.nextSegmentId != null,
+            ) {
+                Text(
+                    position.nextSegmentId?.let { id ->
+                        trip.items.firstOrNull { it.segment.id == id }?.let { "Next ${it.timeLabel}" }
+                    } ?: "Last clip",
+                )
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
             }
         }
     }

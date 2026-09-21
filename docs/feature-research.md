@@ -33,7 +33,8 @@ of Roadguard's defaults come from**.
 | Storage safety | a reserve the loop cannot spend, and a floor under deletion |
 | Start-up repair | five defined divergence cases, biased toward keeping footage |
 | In-app gallery and player | Media3, with protect/unprotect and share |
-| GPX track export | off in the default GPS mode |
+| Trips | clips grouped into drives by a 2-minute gap rule, named from the offline map (suburbs by default, cities between cities) |
+| GPX track per trip | **on by default**; opens in CoMaps or Organic Maps from the gallery, deleted with the trip's last clip |
 | Diagnostics with provenance | every value tagged measured / inferred / simulated / not reported |
 | Four themes | Light, Dark, System, OLED-black |
 | Power-event actions | start on power connected; four choices on disconnect |
@@ -123,7 +124,9 @@ Storage screen reports a *measured* rate instead.
 | --- | --- | --- |
 | Location | On | reasoned; the app works fully without the permission |
 | Speed unit | km/h | reasoned: Australia |
-| GPS storage | Overlay + metadata | reasoned: keeps position with the footage, no separate track file to leak, no coordinates burned into pixels |
+| Location in the video | Overlay + metadata | reasoned: keeps position with the footage, no coordinates burned into pixels |
+| GPX track per trip | **On** | product owner's decision: the track is what lets a drive be opened in a map app; it stays on the device and leaves with the trip's last clip |
+| Trip naming | suburbs, cities between cities | product owner's decision; the thresholds (2 min gap, 3/8/20 km) are reasoned starting points, see `docs/trips-and-tracks.md` |
 | On power connected | Start recording | reasoned: matches how a dashcam is used — cradle it, plug it in, drive |
 | On power disconnected | Keep recording | reasoned: a loose cable must not end a recording. Three alternatives offered |
 | Stop delay | 300 s | reasoned |

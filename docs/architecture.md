@@ -24,6 +24,7 @@ by anything else in the app.** Everything below follows from that.
                        │ PowerMonitor        MapRepository            │
                        │ WeatherRepository   DiagnosticsCollector     │
                        │ ProtectionCoordinator  DeviceCapabilityProbe │
+                       │ TripRepository      OfflinePlaceLookup       │
                        └───────────────────┬──────────────────────────┘
                                            │
                        ┌───────────────────▼──────────────────────────┐
@@ -36,14 +37,15 @@ by anything else in the app.** Everything below follows from that.
    Pure policy         │ ThermalPolicy  StorageBudget  SegmentPlanner │
    (no Android at all) │ RecordingProfileSelector  DeviceTierScorer   │
                        │ ImpactDetector  ProtectionPlanner  PreviewFit│
-                       │ SpeedFilter  PowerPolicy                     │
+                       │ SpeedFilter  PowerPolicy  TripAssembler      │
+                       │ TripNaming  PlaceRanking  TrackPointFilter   │
                        └──────────────────────────────────────────────┘
 ```
 
 The bottom layer is the important one. `ThermalPolicy`, `StorageBudget`,
 `RecordingProfileSelector`, `DeviceTierScorer`, `ImpactDetector`, `ProtectionPlanner`,
 `SegmentPlanner`, `PreviewFit`, `SpeedFilter` and `PowerPolicy` import nothing from
-`android.*`. They take value types in and return value types out. That is why 264 pure-policy
+`android.*`. They take value types in and return value types out. That is why 312 pure-policy
 unit tests can exercise the whole decision surface of the app — the thermal ladder, the storage
 arithmetic, the event discriminators — on a JVM, in 18 seconds, with no device.
 
@@ -307,6 +309,21 @@ two segments no matter what the budget says. See `docs/storage.md`.
 filesystem and the index. Its bias is always to **keep footage**: unreadable or unexpected
 files are quarantined, never deleted.
 
+## 10.1 Trips and tracks
+
+Every recording session belongs to a **trip**: `TripRepository` opens one (or continues the
+previous one, when the new session starts within two minutes of its end), every clip carries its
+`tripId`, the trip's end advances as clips finalise, and it is closed and named when recording
+stops. `TrackRecorder` writes the trip's GPX track from the same location updates the overlay
+reads. Both are guarded so a failure in either leaves recording untouched — the trip is index
+rows and the track is a small side file; neither can reach the camera or the encoder.
+
+Naming uses the offline map archive itself: `PmtilesReader` walks the PMTiles directories to
+fetch the nine tiles around a coordinate, `VectorTileDecoder` reads only the `places` layer out
+of them, and the pure `PlaceRanking` and `TripNaming` decide what the trip is called. Full
+detail, including the verification against the published archives, in
+[`docs/trips-and-tracks.md`](trips-and-tracks.md).
+
 ## 11. Events
 
 `ImpactDetector` is a multi-stage detector, not a threshold: rolling 4-second history →
@@ -377,4 +394,5 @@ Four themes: Light, Dark, System and OLED-black.
 | Auto quality | `capability/RecordingProfile.kt`, `capability/DeviceTier.kt` |
 | Event detection | `event/ImpactDetector.kt`, `event/ProtectionPlanner.kt` |
 | Offline map install | `map/MapRepository.kt`, `map/MapDownloader.kt`, `map/MapInstaller.kt` |
+| Trips, naming, GPX tracks | `trip/TripRepository.kt`, `trip/TripNaming.kt`, `map/PlaceRanking.kt`, `location/TrackRecorder.kt` |
 | Dependency graph | `core/RoadguardContainer.kt` |

@@ -27,7 +27,7 @@ It has no accounts, no cloud, no analytics and no telemetry. Everything stays on
 
 > ### Status: complete and building; **never run on a device**
 >
-> The application is fully implemented, 444 automated tests pass, Android Lint is clean and both
+> The application is fully implemented, 522 automated tests pass, Android Lint is clean and both
 > APKs build and verify. **It has never been installed on a phone or an emulator** — no device was
 > available. So there are no screenshots, no measured benchmarks and no physical thermal
 > validation, and this README does not pretend otherwise. [What is and is not
@@ -61,6 +61,15 @@ It has no accounts, no cloud, no analytics and no telemetry. Everything stays on
 - **A brake indicator** — a tiny red LED burned into the corner of the video while GNSS shows
   the vehicle braking, with a soft halo for hard braking. Purely an annotation: it never
   protects footage and never writes anything. See [`docs/event-detection.md`](docs/event-detection.md) §11.
+
+### Trips and tracks
+- **Recordings are grouped into trips** — one per drive, split where the recording times jump by
+  more than two minutes — and each trip is **named from the offline map**: suburbs by default
+  ("Harrison → Braddon"), cities when the drive moves between two ("Canberra → Sydney"). The names
+  come from the map archive already on the phone; nothing is looked up online.
+- **A GPX track of every trip**, on by default, written crash-safely as you drive. Open it in
+  CoMaps or Organic Maps, or share it, from the recordings list. It stays on the device and is
+  deleted with the trip's last clip. See [`docs/trips-and-tracks.md`](docs/trips-and-tracks.md).
 
 ### Thermal management
 - A dedicated four-level policy engine: `Normal` → `Elevated` → `High` → `Critical`.
@@ -124,7 +133,7 @@ Needs JDK 21 and the Android SDK (platform 37, build tools 37.0.0). Gradle comes
 pinned by version **and SHA-256**.
 
 ```bash
-./gradlew :app:testDebugUnitTest   # 444 tests
+./gradlew :app:testDebugUnitTest   # 522 tests
 ./gradlew :app:lintDebug
 ./gradlew :app:assembleRelease
 ```
@@ -145,6 +154,7 @@ can actually sideload. See [`docs/build.md`](docs/build.md).
 | [`docs/storage.md`](docs/storage.md) | The reserve, the budget, what is never deleted, start-up repair |
 | [`docs/event-detection.md`](docs/event-detection.md) | Every detector stage, the tuning table, and an honest statement of limits |
 | [`docs/offline-maps.md`](docs/offline-maps.md) | PMTiles, the Protomaps Basemap schema, the 18-layer style, installation and recovery |
+| [`docs/trips-and-tracks.md`](docs/trips-and-tracks.md) | Trips, the gap rule, place names from the offline map, GPX tracks and opening them in a map app |
 | [`docs/privacy.md`](docs/privacy.md) | Everything that leaves the device, every permission, how to verify it |
 | [`docs/testing.md`](docs/testing.md) | What runs, what it covers, **what is untested**, and a manual test plan |
 | [`docs/benchmarking.md`](docs/benchmarking.md) | Calculated figures marked as calculated, and the measurements nobody has taken |
@@ -159,7 +169,7 @@ can actually sideload. See [`docs/build.md`](docs/build.md).
 
 | | |
 | --- | --- |
-| Automated tests | **444 pass, 0 fail** — including 67 Compose UI tests that run on the JVM |
+| Automated tests | **522 pass, 0 fail** — including 77 Compose UI tests that run on the JVM |
 | Android Lint | clean, against a baseline of four reviewed categories |
 | Debug APK | builds, `apksigner verify` passes |
 | Release APK | builds (minified, resource-shrunk), `apksigner verify` passes |

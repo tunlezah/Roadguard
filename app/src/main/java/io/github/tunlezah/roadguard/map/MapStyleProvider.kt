@@ -71,18 +71,21 @@ class MapStyleProvider(private val context: Context) {
         return "$scheme://file://${archive.absolutePath}"
     }
 
-    fun findArchive(directory: File): File? {
-        if (!directory.isDirectory) return null
-        return directory.walkTopDown()
-            .filter { it.isFile }
-            .filter { it.extension.equals("pmtiles", true) || it.extension.equals("mbtiles", true) }
-            // Largest wins: a package could carry a small companion archive, and the basemap is
-            // always the big one.
-            .maxByOrNull { it.length() }
-    }
+    fun findArchive(directory: File): File? = findArchiveIn(directory)
 
     companion object {
         private const val TAG = "RoadguardMapStyle"
+
+        /** The tile archive inside an installed package directory, or null. */
+        fun findArchiveIn(directory: File): File? {
+            if (!directory.isDirectory) return null
+            return directory.walkTopDown()
+                .filter { it.isFile }
+                .filter { it.extension.equals("pmtiles", true) || it.extension.equals("mbtiles", true) }
+                // Largest wins: a package could carry a small companion archive, and the basemap is
+                // always the big one.
+                .maxByOrNull { it.length() }
+        }
 
         const val PMTILES_PLACEHOLDER = "__PMTILES_URI__"
         const val STYLE_DAY = "map/style-day.json"

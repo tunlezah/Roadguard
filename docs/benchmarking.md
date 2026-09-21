@@ -14,7 +14,7 @@
 
 | Metric | Value |
 | --- | --- |
-| Unit test suite | **444 tests, 0 failures, 0 errors, 0 skipped** (377 plain JVM, 67 Compose UI) |
+| Unit test suite | **522 tests, 0 failures, 0 errors, 0 skipped** (445 plain JVM, 77 Compose UI) |
 | Unit test wall clock | ~31 s of test execution (warm Gradle, configuration cache hit) |
 | Debug APK | 83,986,408 bytes (80.1 MiB) |
 | Release APK | 38,408,961 bytes (36.6 MiB) |

@@ -69,6 +69,15 @@ data class Settings(
     val speedUnit: SpeedUnit = SpeedUnit.KilometresPerHour,
     val gpsStorage: GpsStorageMode = GpsStorageMode.OverlayAndMetadata,
 
+    /**
+     * Write a GPX track of every trip.
+     *
+     * On by default at the product owner's request: the track is what lets a drive be opened in a
+     * map app afterwards, and it never leaves the device unless the user shares it. It is written
+     * only while location is on, and it is deleted with the trip's last clip.
+     */
+    val saveGpxTrack: Boolean = true,
+
     // ── Power ──────────────────────────────────────────────────────────────────────
     val onPowerConnected: PowerConnectedAction = PowerConnectedAction.StartRecording,
     val onPowerDisconnected: PowerDisconnectedAction = PowerDisconnectedAction.ContinueRecording,
@@ -179,14 +188,19 @@ enum class SpeedUnit(val label: String, val suffix: String, val fromMetresPerSec
     MilesPerHour("mph", "mph", 2.236936f),
 }
 
-/** Where GPS information is retained. Nothing is ever uploaded. */
-enum class GpsStorageMode(val label: String, val overlay: Boolean, val metadata: Boolean, val track: Boolean) {
-    None("Do not store", overlay = false, metadata = false, track = false),
-    OverlayOnly("Overlay only", overlay = true, metadata = false, track = false),
-    MetadataOnly("Video metadata only", overlay = false, metadata = true, track = false),
-    TrackOnly("GPX track only", overlay = false, metadata = false, track = true),
-    OverlayAndMetadata("Overlay and video metadata", overlay = true, metadata = true, track = false),
-    All("Overlay, metadata and GPX track", overlay = true, metadata = true, track = true),
+/**
+ * Where location is kept *in the video*: burned into the pixels as the speed and coordinates
+ * overlays, written into the MP4's metadata, both or neither. Nothing is ever uploaded.
+ *
+ * The GPX track is a separate switch, [Settings.saveGpxTrack]. It used to be two extra positions
+ * here (`TrackOnly` and `All`); [SettingsRepository] maps those stored names onto the new pair so
+ * an upgrade keeps exactly what the user had chosen.
+ */
+enum class GpsStorageMode(val label: String, val overlay: Boolean, val metadata: Boolean) {
+    None("Not in the video", overlay = false, metadata = false),
+    OverlayOnly("Overlay only", overlay = true, metadata = false),
+    MetadataOnly("Video metadata only", overlay = false, metadata = true),
+    OverlayAndMetadata("Overlay and video metadata", overlay = true, metadata = true),
 }
 
 enum class PowerConnectedAction(val label: String) {

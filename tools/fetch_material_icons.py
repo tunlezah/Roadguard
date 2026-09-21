@@ -33,7 +33,7 @@ ICONS = [
     "high_quality", "history", "location_searching", "lock", "lock_open", "map",
     "mic", "mic_off", "more_horiz", "movie", "my_location", "near_me",
     "nights_stay", "north", "notifications_active", "palette", "pause", "pin_drop",
-    "power_off", "privacy_tip", "report_problem", "restore", "schedule", "screen_lock_portrait",
+    "power_off", "privacy_tip", "report_problem", "restore", "route", "schedule", "screen_lock_portrait",
     "sd_card", "sensors", "speed", "stop", "storage", "thermostat",
     "tune", "vibration", "video_library", "videocam", "videocam_off", "visibility_off",
     "warning", "zoom_out_map",

@@ -73,13 +73,13 @@ class SettingsRepositoryTest {
             it.copy(
                 quality = QualitySetting.Uhd2160p,
                 speedUnit = SpeedUnit.MilesPerHour,
-                gpsStorage = GpsStorageMode.All,
+                gpsStorage = GpsStorageMode.MetadataOnly,
             )
         }
         val stored = repository.settings.first()
         assertThat(stored.quality).isEqualTo(QualitySetting.Uhd2160p)
         assertThat(stored.speedUnit).isEqualTo(SpeedUnit.MilesPerHour)
-        assertThat(stored.gpsStorage).isEqualTo(GpsStorageMode.All)
+        assertThat(stored.gpsStorage).isEqualTo(GpsStorageMode.MetadataOnly)
     }
 
     @Test
@@ -156,7 +156,8 @@ class SettingsRepositoryTest {
             storageVolumeId = "usb-otg-0",
             locationEnabled = false,
             speedUnit = SpeedUnit.MilesPerHour,
-            gpsStorage = GpsStorageMode.TrackOnly,
+            gpsStorage = GpsStorageMode.None,
+            saveGpxTrack = false,
             onPowerConnected = PowerConnectedAction.Prompt,
             onPowerDisconnected = PowerDisconnectedAction.StopAfterDelay,
             powerDisconnectStopDelaySeconds = 45,

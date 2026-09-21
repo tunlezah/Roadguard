@@ -105,6 +105,15 @@ roads.
 `tools/generate_map_styles.py` generates both styles from one description, so day and night
 cannot drift apart.
 
+### The archive also names trips
+
+The `places` layer the style draws is read a second time, by Roadguard's own code rather than by
+MapLibre, to name the two ends of every trip in the gallery. `map/PmtilesReader.kt` walks the
+archive's directories to fetch single tiles and `map/VectorTileDecoder.kt` decodes only the
+`places` layer out of them. Decoding real tiles from the published archives showed that even the
+zoom-12 whole-of-Australia archive carries suburb points in its deepest tiles, so suburb-level
+names need no change of package. See [`trips-and-tracks.md`](trips-and-tracks.md).
+
 ## 3. Installation
 
 ```

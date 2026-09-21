@@ -60,6 +60,11 @@ fun RoadguardApp(
         if (backStack.size > 1) backStack.removeAt(backStack.lastIndex)
     }
 
+    /** Swaps the top of the stack, so stepping through a trip's clips does not pile up screens. */
+    fun replace(destination: RoadguardDestination) {
+        backStack[backStack.lastIndex] = destination
+    }
+
     BackHandler(enabled = backStack.size > 1) { pop() }
 
     if (!settings.setupComplete) {
@@ -126,10 +131,15 @@ fun RoadguardApp(
                 onOpenSegment = { push(RoadguardDestination.Player(it)) },
             )
 
-            is RoadguardDestination.Player -> PlayerScreen(
-                segmentId = destination.segmentId,
-                onBack = ::pop,
-            )
+            is RoadguardDestination.Player -> {
+                val context = androidx.compose.ui.platform.LocalContext.current
+                PlayerScreen(
+                    segmentId = destination.segmentId,
+                    onBack = ::pop,
+                    onOpenSegment = { replace(RoadguardDestination.Player(it)) },
+                    onOpenTrack = { file -> io.github.tunlezah.roadguard.ui.gallery.TrackIntents.open(context, file) },
+                )
+            }
 
             RoadguardDestination.About -> AboutScreen(onBack = ::pop)
 

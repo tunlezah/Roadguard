@@ -10,7 +10,10 @@ import io.github.tunlezah.roadguard.diagnostics.DiagnosticsCollector
 import io.github.tunlezah.roadguard.event.EventSensorSource
 import io.github.tunlezah.roadguard.event.ProtectionCoordinator
 import io.github.tunlezah.roadguard.location.LocationEngine
+import io.github.tunlezah.roadguard.location.TrackRecorder
 import io.github.tunlezah.roadguard.map.MapRepository
+import io.github.tunlezah.roadguard.map.OfflinePlaceLookup
+import io.github.tunlezah.roadguard.map.PlaceLookup
 import io.github.tunlezah.roadguard.overlay.OverlayComposer
 import io.github.tunlezah.roadguard.power.PowerMonitor
 import io.github.tunlezah.roadguard.recording.RecordingController
@@ -21,6 +24,7 @@ import io.github.tunlezah.roadguard.storage.StorageReconciler
 import io.github.tunlezah.roadguard.thermal.AndroidThermalSource
 import io.github.tunlezah.roadguard.thermal.SimulatedThermalSource
 import io.github.tunlezah.roadguard.thermal.ThermalSource
+import io.github.tunlezah.roadguard.trip.TripRepository
 import io.github.tunlezah.roadguard.weather.OpenMeteoWeatherSource
 import io.github.tunlezah.roadguard.weather.WeatherRepository
 import kotlinx.coroutines.CoroutineScope
@@ -83,11 +87,25 @@ class RoadguardContainer(private val appContext: Context) {
      * Deliberately not initialised from [settings] here: that snapshot is the compiled-in
      * default until DataStore's first read completes, so it cannot be trusted for the volume.
      */
-    val storageManager: StorageManager by lazy { StorageManager(appContext, database.segments()) }
+    val storageManager: StorageManager by lazy {
+        StorageManager(appContext, database.segments(), database.trips())
+    }
 
     val storageReconciler: StorageReconciler by lazy {
-        StorageReconciler(storageManager, database.segments(), database.events())
+        StorageReconciler(storageManager, database.segments(), database.events(), tripRepository)
     }
+
+    /**
+     * Place names from the installed offline map. Reads the same archive the map renders from, so
+     * naming a trip needs no network and no extra download.
+     */
+    val placeLookup: PlaceLookup by lazy { OfflinePlaceLookup(mapRepository) }
+
+    val tripRepository: TripRepository by lazy {
+        TripRepository(database.trips(), database.segments(), storageManager, placeLookup)
+    }
+
+    val trackRecorder: TrackRecorder by lazy { TrackRecorder() }
 
     val protectionCoordinator: ProtectionCoordinator by lazy {
         ProtectionCoordinator(database.segments(), database.events(), storageManager)
@@ -157,6 +175,8 @@ class RoadguardContainer(private val appContext: Context) {
             segments = database.segments(),
             protection = protectionCoordinator,
             locationEngine = locationEngine,
+            trips = tripRepository,
+            trackRecorder = trackRecorder,
             sensorSource = sensorSource,
             thermalSource = thermalSource,
             powerMonitor = powerMonitor,

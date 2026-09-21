@@ -13,7 +13,7 @@ import java.util.TimeZone
  *
  * A dashcam cannot buffer a whole drive and write the file at the end: the process may be
  * killed at any moment, and the drive that gets killed is exactly the one worth keeping. So
- * every point is appended and flushed, and the closing tags are rewritten in place each time.
+ * every point is appended in place and the closing tags are rewritten each time.
  *
  * The trick that makes that cheap: the file always ends with the closing
  * `</trkseg></trk></gpx>` tags, and the next append seeks back over them, writes the new
@@ -21,17 +21,32 @@ import java.util.TimeZone
  * openable GPX document -- even if the phone loses power mid-drive -- and no rewrite of
  * earlier content is ever needed.
  *
+ * ### How often it reaches the disk
+ *
+ * Every append is a write into the page cache; `fsync` runs at most once per [syncIntervalMs].
+ * One fix a second with an fsync each would be 3,600 flushes an hour on the same eMMC the video
+ * encoder is writing to, for the sake of at most one second of track. A few seconds of
+ * exposure is the right trade, and [flush] and [close] force the last points out.
+ *
  * GPS never leaves the device: this file is written to Roadguard's own storage and is only
  * shared if the user explicitly shares it.
  */
-class GpxWriter(private val file: File, private val creator: String = "Roadguard") : AutoCloseable {
+class GpxWriter(
+    private val file: File,
+    private val creator: String = "Roadguard",
+    private val syncIntervalMs: Long = 0L,
+    private val clock: () -> Long = System::currentTimeMillis,
+) : AutoCloseable {
 
     private val timestampFormat = SimpleDateFormat(TIMESTAMP_PATTERN, Locale.US).apply {
         timeZone = TimeZone.getTimeZone("UTC")
     }
     private var handle: RandomAccessFile? = null
     private var pointCount = 0
+    private var lastSyncAt = 0L
+    private var dirty = false
 
+    /** Points appended through this writer; a reopened file's earlier points are not counted. */
     val points: Int get() = pointCount
 
     /** Creates the file with an empty track, or reopens an existing one for appending. */
@@ -51,6 +66,7 @@ class GpxWriter(private val file: File, private val creator: String = "Roadguard
             val trailer = FOOTER.toByteArray()
             if (raf.length() >= trailer.size) raf.seek(raf.length() - trailer.size)
         }
+        lastSyncAt = clock()
     }
 
     /**
@@ -76,13 +92,23 @@ class GpxWriter(private val file: File, private val creator: String = "Roadguard
         raf.seek(insertAt)
         raf.write(point(latitude, longitude, altitudeMetres, epochMs, speedMps, accuracyMetres, satellites).toByteArray())
         raf.write(trailer)
-        // Force the point out to storage: an unflushed point is a point lost to a power cut.
-        raf.fd.sync()
         pointCount++
+        dirty = true
+        val now = clock()
+        if (syncIntervalMs <= 0L || now - lastSyncAt >= syncIntervalMs) flush(now)
+    }
+
+    /** Forces everything written so far onto storage. */
+    fun flush(now: Long = clock()) {
+        val raf = handle ?: return
+        if (!dirty) return
+        runCatching { raf.fd.sync() }
+        dirty = false
+        lastSyncAt = now
     }
 
     override fun close() {
-        runCatching { handle?.fd?.sync() }
+        flush()
         runCatching { handle?.close() }
         handle = null
     }
@@ -96,7 +122,7 @@ class GpxWriter(private val file: File, private val creator: String = "Roadguard
         )
         appendLine("  <metadata>")
         appendLine("    <name>${escape(trackName)}</name>")
-        appendLine("    <time>${timestampFormat.format(Date(System.currentTimeMillis()))}</time>")
+        appendLine("    <time>${timestampFormat.format(Date(clock()))}</time>")
         appendLine("  </metadata>")
         appendLine("  <trk>")
         appendLine("    <name>${escape(trackName)}</name>")
@@ -128,16 +154,59 @@ class GpxWriter(private val file: File, private val creator: String = "Roadguard
         appendLine("      </trkpt>")
     }
 
-    private fun escape(value: String): String = value
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
-
     companion object {
         private const val TIMESTAMP_PATTERN = "yyyy-MM-dd'T'HH:mm:ss'Z'"
 
         /** Kept as a constant because [append] seeks back over exactly this many bytes. */
         const val FOOTER = "    </trkseg>\n  </trk>\n</gpx>\n"
+
+        private val NAME_LINE = Regex("""(?m)^([ \t]*)<name>.*?</name>$""")
+
+        /**
+         * Renames a finished track in place.
+         *
+         * The name is written into the header when the file is opened, which is before the trip
+         * has been named. Once the ends are known ("Harrison → Braddon") the two `<name>` elements
+         * are rewritten through a temporary file and an atomic rename, so a crash mid-rewrite
+         * leaves the old file rather than half of the new one. Track points carry no `<name>`, so
+         * the pattern cannot touch them.
+         */
+        fun rename(file: File, trackName: String): Boolean = runCatching {
+            if (!file.isFile) return false
+            val text = file.readText()
+            val replaced = NAME_LINE.replace(text) { match -> "${match.groupValues[1]}<name>${escape(trackName)}</name>" }
+            if (replaced == text) return true
+            val temp = File(file.parentFile, file.name + ".tmp")
+            temp.writeText(replaced)
+            if (temp.renameTo(file)) return true
+            file.writeText(replaced)
+            temp.delete()
+            true
+        }.getOrDefault(false)
+
+        /**
+         * Reads the track points back, thinned to at most [maxPoints], for drawing a route sketch.
+         *
+         * A regular expression over Roadguard's own output rather than an XML parser: the file was
+         * written by [point] above, one attribute pair per `trkpt`, and this is a picture, not a
+         * measurement.
+         */
+        fun readPoints(file: File, maxPoints: Int = 64): List<Pair<Double, Double>> = runCatching {
+            if (!file.isFile) return emptyList()
+            val all = TRACK_POINT.findAll(file.readText())
+                .map { it.groupValues[1].toDouble() to it.groupValues[2].toDouble() }
+                .toList()
+            if (all.size <= maxPoints) return all
+            val step = all.size.toDouble() / maxPoints
+            List(maxPoints) { i -> all[(i * step).toInt().coerceAtMost(all.size - 1)] }
+        }.getOrDefault(emptyList())
+
+        private val TRACK_POINT = Regex("""<trkpt lat="(-?[0-9.]+)" lon="(-?[0-9.]+)">""")
+
+        private fun escape(value: String): String = value
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
     }
 }

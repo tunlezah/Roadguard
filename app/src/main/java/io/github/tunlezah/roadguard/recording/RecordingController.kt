@@ -25,6 +25,7 @@ import android.os.SystemClock
 import io.github.tunlezah.roadguard.data.EventKind
 import io.github.tunlezah.roadguard.data.SegmentDao
 import io.github.tunlezah.roadguard.data.SegmentEntity
+import io.github.tunlezah.roadguard.data.TripEntity
 import io.github.tunlezah.roadguard.event.BrakeDetector
 import io.github.tunlezah.roadguard.event.BrakeLevel
 import io.github.tunlezah.roadguard.event.EventSensorSource
@@ -32,7 +33,9 @@ import io.github.tunlezah.roadguard.event.ImpactDetector
 import io.github.tunlezah.roadguard.event.MotionContext
 import io.github.tunlezah.roadguard.event.ProtectionCoordinator
 import io.github.tunlezah.roadguard.event.SegmentTiming
+import io.github.tunlezah.roadguard.location.GpxWriter
 import io.github.tunlezah.roadguard.location.LocationEngine
+import io.github.tunlezah.roadguard.location.TrackRecorder
 import io.github.tunlezah.roadguard.overlay.OverlayComposer
 import io.github.tunlezah.roadguard.overlay.VideoOverlayEffect
 import io.github.tunlezah.roadguard.power.PowerAction
@@ -50,6 +53,7 @@ import io.github.tunlezah.roadguard.thermal.ThermalLevel
 import io.github.tunlezah.roadguard.thermal.ThermalPlan
 import io.github.tunlezah.roadguard.thermal.ThermalPolicy
 import io.github.tunlezah.roadguard.thermal.ThermalSource
+import io.github.tunlezah.roadguard.trip.TripRepository
 import io.github.tunlezah.roadguard.weather.WeatherState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -65,6 +69,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 
@@ -100,6 +107,15 @@ import java.util.concurrent.Executors
  * a backoff-limited restart; unrecoverable ones stop recording, say why, and leave the last valid
  * segment intact. There is no unbounded restart loop: [MAX_CONSECUTIVE_FAILURES] consecutive
  * failures stop the loop and surface a blocker instead.
+ *
+ * ### Trips and tracks
+ *
+ * Every recording session belongs to a trip (see [TripRepository]): one is opened or continued
+ * when recording starts, each clip is indexed against it, its end advances as clips finalise, and
+ * it is closed and named when recording stops. While it is open, and the user has the GPX switch
+ * on, every usable fix is offered to the [TrackRecorder], which writes the trip's track file.
+ * Neither can touch the camera or the encoder: the trip is index rows and the track is a small
+ * side file, and both are guarded so a failure in either leaves recording untouched.
  */
 class RecordingController(
     private val context: Context,
@@ -111,6 +127,8 @@ class RecordingController(
     private val segments: SegmentDao,
     private val protection: ProtectionCoordinator,
     private val locationEngine: LocationEngine,
+    private val trips: TripRepository,
+    private val trackRecorder: TrackRecorder,
     private val sensorSource: EventSensorSource,
     private val thermalSource: ThermalSource,
     private val powerMonitor: PowerMonitor,
@@ -174,6 +192,10 @@ class RecordingController(
     private var supervisionJob: Job? = null
     private var scheduledStopJob: Job? = null
     private var lastSettings: Settings = Settings()
+
+    /** The trip this recording session belongs to, or null between sessions. */
+    @Volatile
+    private var activeTripId: Long? = null
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────────────────────
 
@@ -315,6 +337,7 @@ class RecordingController(
         if (!bindCamera(owner, settings, profile)) return
 
         startPeripherals(settings)
+        openTrip(settings)
         startSegment(settings, profile)
     }
 
@@ -389,6 +412,7 @@ class RecordingController(
         // lost from the closing segment.
         sensorJob?.cancel()
         overlayJob?.cancel()
+        closeTrip()
         locationEngine.release(LocationEngine.Client.Recorder)
         sensorSource.stop()
         brakeDetector.reset()
@@ -445,6 +469,7 @@ class RecordingController(
                         isComplete = false,
                         startLatitude = locationEngine.state.value.latitude,
                         startLongitude = locationEngine.state.value.longitude,
+                        tripId = activeTripId,
                     ),
                 )
             }.getOrNull()
@@ -584,13 +609,20 @@ class RecordingController(
                         event.error == VideoRecordEvent.Finalize.ERROR_FILE_SIZE_LIMIT_REACHED ||
                         event.error == VideoRecordEvent.Finalize.ERROR_SOURCE_INACTIVE
                     if (usable && file.exists() && file.length() > 0) {
+                        val location = locationEngine.state.value
                         segments.update(
                             entity.copy(
                                 durationMs = durationMs,
                                 sizeBytes = file.length(),
                                 isComplete = true,
+                                endLatitude = location.latitude?.takeIf { location.hasPosition },
+                                endLongitude = location.longitude?.takeIf { location.hasPosition },
                             ),
                         )
+                        (entity.tripId ?: activeTripId)?.let { tripId ->
+                            runCatching { trips.onSegmentFinalised(tripId, handle.startedAtEpochMs + durationMs, location) }
+                                .onFailure { Log.w(TAG, "could not advance trip $tripId", it) }
+                        }
                         protection.onSegmentFinalised(
                             SegmentTiming(entity.id, handle.startedAtEpochMs, durationMs),
                             entity.fileName,
@@ -740,8 +772,80 @@ class RecordingController(
         if (settings.recordingZoom != previous.recordingZoom) {
             cameraSession.setRecordingZoom(settings.recordingZoom)
         }
+        if (settings.saveGpxTrack != previous.saveGpxTrack || settings.locationEnabled != previous.locationEnabled) {
+            applyTrackSetting(settings)
+        }
         requeueProfileIfNeeded()
     }
+
+    // ── Trips and tracks ──────────────────────────────────────────────────────────────────────
+
+    /**
+     * Opens or continues the trip this session records into, and its track when the user wants one.
+     *
+     * Everything here is best effort: a failure is logged and recording proceeds without a trip,
+     * because the footage matters more than its label.
+     */
+    private suspend fun openTrip(settings: Settings) {
+        val trip = runCatching { trips.openOrContinue(System.currentTimeMillis(), locationEngine.state.value) }
+            .onFailure { Log.w(TAG, "could not open a trip", it) }
+            .getOrNull() ?: return
+        activeTripId = trip.id
+        if (settings.saveGpxTrack && settings.locationEnabled) openTrack(trip)
+    }
+
+    private suspend fun openTrack(trip: TripEntity) {
+        val file = trip.trackFileName?.let { storage.trackFile(it) } ?: storage.createTrackFile(trip.startedAtEpochMs)
+        val opened = trackRecorder.open(
+            target = file,
+            trackName = provisionalTrackName(trip.startedAtEpochMs),
+            existingPoints = trip.trackPointCount,
+            existingDistanceMetres = trip.distanceMetres,
+        )
+        if (opened) {
+            runCatching { trips.setTrackFile(trip.id, file.name) }
+                .onFailure { Log.w(TAG, "could not record the track file for trip ${trip.id}", it) }
+        }
+    }
+
+    /** Reacts to the GPX switch, or location, changing while a recording is running. */
+    private suspend fun applyTrackSetting(settings: Settings) {
+        val tripId = activeTripId ?: return
+        val wanted = settings.saveGpxTrack && settings.locationEnabled
+        if (wanted && !trackRecorder.isOpen) {
+            val trip = runCatching { trips.byId(tripId) }
+                .onFailure { Log.w(TAG, "could not read trip $tripId", it) }
+                .getOrNull() ?: return
+            openTrack(trip)
+        } else if (!wanted && trackRecorder.isOpen) {
+            val summary = trackRecorder.close()
+            runCatching { trips.recordTrack(tripId, summary) }
+                .onFailure { Log.w(TAG, "could not record the track for trip $tripId", it) }
+        }
+    }
+
+    /**
+     * Closes the session's trip: the track is finished, the row closed and named, and the track
+     * file renamed after the trip so a map app shows "Harrison → Braddon" rather than a timestamp.
+     */
+    private suspend fun closeTrip() {
+        val tripId = activeTripId ?: return
+        activeTripId = null
+        val summary = trackRecorder.close()
+        val closed = runCatching {
+            trips.close(tripId, summary, locationEngine.state.value, System.currentTimeMillis())
+        }.onFailure { Log.w(TAG, "could not close trip $tripId", it) }.getOrNull() ?: return
+        val trackName = closed.trackFileName ?: return
+        val label = trips.labelFor(closed, provisionalTrackName(closed.startedAtEpochMs))
+        withContext(Dispatchers.IO) {
+            GpxWriter.rename(storage.trackFile(trackName), "${label.title} · ${trackDate(closed.startedAtEpochMs)}")
+        }
+    }
+
+    private fun provisionalTrackName(startedAtEpochMs: Long): String = "Roadguard trip ${trackDate(startedAtEpochMs)}"
+
+    private fun trackDate(epochMs: Long): String =
+        SimpleDateFormat("d MMM yyyy HH:mm", Locale.getDefault()).format(Date(epochMs))
 
     private fun onThermalReading(reading: io.github.tunlezah.roadguard.thermal.ThermalReading) {
         val level = thermalPolicy.accept(reading)
@@ -881,6 +985,9 @@ class RecordingController(
      * through so the indicator goes out rather than freezing on.
      */
     private suspend fun onLocationState(location: io.github.tunlezah.roadguard.location.LocationState) {
+        // The track recorder filters and deduplicates for itself; this is a cheap volatile read
+        // when no track is open, which is the case between sessions.
+        if (trackRecorder.isOpen) trackRecorder.accept(location)
         val speed = location.speedMetresPerSecond
         if (speed == null) {
             if (lastBrakeFixEpochMs != null) {

@@ -109,16 +109,21 @@ Everything lives under `Android/data/io.github.tunlezah.roadguard/files/`.
 | Protection marks | `recordings/*.protected.json` | deleted with the segment |
 | GPS coordinates burned into video | inside the `.mp4` pixels | the "coordinates" overlay toggle — **off by default** |
 | GPS in video metadata | `.mp4` metadata | the GPS storage setting |
-| GPX tracks | `tracks/*.gpx` | the GPS storage setting — track writing is **off** in the default mode |
+| GPX tracks | `tracks/*.gpx` | the "Save a GPX track of each trip" switch, **on** by default; one file per trip, deleted with the trip's last clip |
+| Trip names | Room database | derived on the phone from the offline map's place names; no lookup ever leaves the device |
 | Segment and event index | Room database | deleted with the app |
 | Settings | DataStore | deleted with the app |
 | Diagnostics exports | `diagnostics/` | only created when you export one |
 | Offline map | `maps/` | removable from the Storage screen |
 
-The **GPS storage setting** is a single control with six positions, from `None` ("do not store")
-through overlay-only, metadata-only, track-only, overlay+metadata (the default) to all three.
-Coordinates burned into the video are **off** by default; speed is on, because speed without a
-position is not identifying.
+Location is governed by two controls. **Location in the video** has four positions — not in the
+video, overlay only, metadata only, or overlay and metadata (the default). Coordinates burned into
+the video are **off** by default; speed is on, because speed without a position is not identifying.
+**Save a GPX track of each trip** is a switch, on by default at the product owner's request: the
+track is what lets a drive be opened in a map app afterwards. It is written only while location is
+on, stays in Roadguard's own folder, and is deleted with the trip's last clip. Trip names
+("Harrison → Braddon") are looked up in the offline map archive already on the phone — the same
+file the moving map draws — so naming a trip contacts nothing.
 
 Uninstalling Roadguard deletes all of it. That is the flip side of using app-specific storage,
 and it means "how do I remove everything" has a one-step answer — but also that you must export
@@ -129,6 +134,10 @@ anything you want to keep first. The app says so.
 * Sharing a clip or a diagnostics report goes through a `FileProvider` with
   `android:exported="false"` and `grantUriPermissions="true"`, scoped by `xml/file_paths` to
   Roadguard's own directories. Nothing outside them is reachable.
+* Opening a trip's GPX track in a map app is the same kind of action: a view intent with a
+  `FileProvider` URI, fired when you tap "Open GPX track". The manifest's `<queries>` block
+  declares that one intent so Roadguard can tell whether any app would answer it and offer the
+  share sheet instead of an empty chooser; it grants no access to anything.
 * Nothing is ever shared automatically.
 * A shared video contains whatever overlays you enabled — including coordinates, if you turned
   them on. Check before you send footage to anyone.

@@ -73,6 +73,7 @@ class SettingsRepository(private val context: Context) {
         val LOCATION_ENABLED = booleanPreferencesKey("location_enabled")
         val SPEED_UNIT = stringPreferencesKey("speed_unit")
         val GPS_STORAGE = stringPreferencesKey("gps_storage")
+        val SAVE_GPX_TRACK = booleanPreferencesKey("save_gpx_track")
 
         val ON_POWER_CONNECTED = stringPreferencesKey("on_power_connected")
         val ON_POWER_DISCONNECTED = stringPreferencesKey("on_power_disconnected")
@@ -92,6 +93,8 @@ class SettingsRepository(private val context: Context) {
 
     private fun Preferences.toSettings(): Settings {
         val defaults = Settings()
+        // A value stored by a build that still had the GPX positions inside the GPS storage mode.
+        val legacyGps = legacyGpsStorage(this[Keys.GPS_STORAGE])
         return Settings(
             quality = enumOr(this[Keys.QUALITY], defaults.quality),
             frameRate = enumOr(this[Keys.FRAME_RATE], defaults.frameRate),
@@ -124,7 +127,8 @@ class SettingsRepository(private val context: Context) {
             storageVolumeId = this[Keys.STORAGE_VOLUME] ?: defaults.storageVolumeId,
             locationEnabled = this[Keys.LOCATION_ENABLED] ?: defaults.locationEnabled,
             speedUnit = enumOr(this[Keys.SPEED_UNIT], defaults.speedUnit),
-            gpsStorage = enumOr(this[Keys.GPS_STORAGE], defaults.gpsStorage),
+            gpsStorage = legacyGps?.first ?: enumOr(this[Keys.GPS_STORAGE], defaults.gpsStorage),
+            saveGpxTrack = this[Keys.SAVE_GPX_TRACK] ?: legacyGps?.second ?: defaults.saveGpxTrack,
             onPowerConnected = enumOr(this[Keys.ON_POWER_CONNECTED], defaults.onPowerConnected),
             onPowerDisconnected = enumOr(this[Keys.ON_POWER_DISCONNECTED], defaults.onPowerDisconnected),
             powerDisconnectStopDelaySeconds = this[Keys.POWER_STOP_DELAY] ?: defaults.powerDisconnectStopDelaySeconds,
@@ -172,6 +176,7 @@ class SettingsRepository(private val context: Context) {
         preferences[Keys.LOCATION_ENABLED] = locationEnabled
         preferences[Keys.SPEED_UNIT] = speedUnit.name
         preferences[Keys.GPS_STORAGE] = gpsStorage.name
+        preferences[Keys.SAVE_GPX_TRACK] = saveGpxTrack
         preferences[Keys.ON_POWER_CONNECTED] = onPowerConnected.name
         preferences[Keys.ON_POWER_DISCONNECTED] = onPowerDisconnected.name
         preferences[Keys.POWER_STOP_DELAY] = powerDisconnectStopDelaySeconds
@@ -189,6 +194,20 @@ class SettingsRepository(private val context: Context) {
     }
 
     companion object {
+        /**
+         * Maps a GPS storage name written by an earlier build onto today's two settings.
+         *
+         * `TrackOnly` and `All` were removed from [GpsStorageMode] when the GPX track became its own
+         * switch. Each is translated to the video mode it implied plus the track switched on, so an
+         * upgrade changes nothing the user could see. Any other name -- current or unknown -- returns
+         * null and is read the ordinary way.
+         */
+        fun legacyGpsStorage(stored: String?): Pair<GpsStorageMode, Boolean>? = when (stored) {
+            "TrackOnly" -> GpsStorageMode.None to true
+            "All" -> GpsStorageMode.OverlayAndMetadata to true
+            else -> null
+        }
+
         /**
          * Clamps every numeric setting into a range the rest of the app can rely on.
          *

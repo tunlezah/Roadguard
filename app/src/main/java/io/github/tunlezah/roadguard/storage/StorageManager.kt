@@ -5,6 +5,7 @@ import android.os.StatFs
 import android.util.Log
 import io.github.tunlezah.roadguard.data.SegmentDao
 import io.github.tunlezah.roadguard.data.SegmentEntity
+import io.github.tunlezah.roadguard.data.TripDao
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,9 +27,20 @@ import java.util.Locale
 class StorageManager(
     private val context: Context,
     private val segments: SegmentDao,
+    private val trips: TripDao,
 ) {
     private val _assessment = MutableStateFlow<StorageAssessment?>(null)
     val assessment: StateFlow<StorageAssessment?> = _assessment.asStateFlow()
+
+    /**
+     * The trip being recorded right now, or null.
+     *
+     * Set by [io.github.tunlezah.roadguard.trip.TripRepository] when a recording opens a trip. It
+     * lives here because this is where trips are pruned: a trip that has just been opened has no
+     * clips for a moment, and that moment must not look like an empty trip to be deleted.
+     */
+    @Volatile
+    var activeTripId: Long? = null
 
     @Volatile
     var layout: StorageLayout = StorageLayout.forVolume(context, null)
@@ -110,6 +122,7 @@ class StorageManager(
 
         var deletedFiles = 0
         var freedBytes = 0L
+        val touchedTrips = LinkedHashSet<Long>()
         for (id in plan.segmentIds) {
             val entity = segments.byId(id) ?: continue
             // Belt and braces: never delete something now marked protected, even though the
@@ -119,6 +132,7 @@ class StorageManager(
             val existed = file.exists()
             if (!existed || file.delete()) {
                 segments.deleteById(id)
+                entity.tripId?.let(touchedTrips::add)
                 if (existed) {
                     deletedFiles++
                     freedBytes += entity.sizeBytes
@@ -127,8 +141,56 @@ class StorageManager(
                 Log.w(TAG, "could not delete ${entity.fileName}; leaving it indexed")
             }
         }
+        // A trip whose last clip has just left the loop takes its track with it.
+        pruneEmptyTrips(touchedTrips)
         CleanupOutcome(deletedFiles, freedBytes)
     }
+
+    /**
+     * Deletes every trip in [tripIds] that has no clips left, together with its GPX track.
+     *
+     * The rule is the product owner's: a track lives exactly as long as the footage it belongs
+     * to. The trip being recorded is never a candidate, however many clips it has.
+     *
+     * @return how many trips were removed.
+     */
+    suspend fun pruneEmptyTrips(tripIds: Collection<Long>): Int = withContext(Dispatchers.IO) {
+        var pruned = 0
+        for (tripId in tripIds.toSet()) {
+            if (tripId == activeTripId) continue
+            if (segments.countForTrip(tripId) > 0) continue
+            val trip = trips.byId(tripId) ?: continue
+            trip.trackFileName?.let { deleteTrack(it) }
+            trips.deleteById(tripId)
+            pruned++
+        }
+        pruned
+    }
+
+    /** Creates the file for a trip's GPX track. Never overwrites an existing file. */
+    fun createTrackFile(startedAtEpochMs: Long): File {
+        layout.ensureDirectories()
+        var candidate = StorageLayout.trackFileName(startedAtEpochMs, ::fileTimestamp)
+        var attempt = 0
+        while (File(layout.tracks, candidate).exists() && attempt < 100) {
+            attempt++
+            candidate = StorageLayout.trackFileName(startedAtEpochMs + attempt * 1_000L, ::fileTimestamp)
+        }
+        return File(layout.tracks, candidate)
+    }
+
+    fun trackFile(fileName: String): File = layout.file(StorageBucket.Tracks, fileName)
+
+    fun deleteTrack(fileName: String): Boolean {
+        val file = trackFile(fileName)
+        return !file.exists() || file.delete()
+    }
+
+    /** Every GPX file in the tracks directory, for start-up reconciliation. */
+    fun trackFiles(): List<File> =
+        layout.tracks.listFiles { file -> file.isFile && file.name.endsWith(".gpx", ignoreCase = true) }
+            ?.toList()
+            .orEmpty()
 
     /** Creates the file for the next segment. Never overwrites an existing file. */
     fun createSegmentFile(startedAtEpochMs: Long, sequence: Long): File {

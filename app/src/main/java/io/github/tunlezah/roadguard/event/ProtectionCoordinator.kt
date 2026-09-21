@@ -134,6 +134,22 @@ class ProtectionCoordinator(
         }
     }
 
+    /**
+     * Protects a set of segments at the user's request, with no event behind them.
+     *
+     * Used for "protect this whole trip": one sidecar per clip and one index update, rather than
+     * one manual event per clip, which would fill the incidents list with things that were not.
+     *
+     * @return how many segments were newly protected.
+     */
+    suspend fun protectSegments(segmentIds: List<Long>, reason: String): Int = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val unprotected = segmentIds.mapNotNull { id -> segments.byId(id)?.takeIf { !it.isProtected }?.id }
+            applyProtection(unprotected, reason, eventId = null, atEpochMs = System.currentTimeMillis())
+            unprotected.size
+        }
+    }
+
     /** Removes protection from one segment, at explicit user request. */
     suspend fun unprotect(segmentId: Long) = withContext(Dispatchers.IO) {
         val entity = segments.byId(segmentId) ?: return@withContext

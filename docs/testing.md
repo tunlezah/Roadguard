@@ -15,16 +15,17 @@
 ./gradlew :app:testDebugUnitTest
 ```
 
-**444 tests. 0 failures. 0 errors. 0 skipped.** About 35 seconds of test execution on a warm
+**522 tests. 0 failures. 0 errors. 0 skipped.** About 50 seconds of test execution on a warm
 build.
 
 | Suite | Tests | What it holds in place |
 | --- | --- | --- |
 | `RecordingProfileSelectorTest` | 44 | The whole Auto decision table: tier ceilings, thermal step-down, camera and encoder support, frame-rate caps, bitrate scaling, dual-camera and stabilisation gating, and the rationale strings |
-| `SettingsValidationTest` | 33 | Every numeric setting clamps; no persisted value can put the recorder in an impossible state |
+| `SettingsValidationTest` | 36 | Every numeric setting clamps; no persisted value can put the recorder in an impossible state; the removed GPS modes map onto today's two settings |
 | `StorageBudgetTest` | 32 | Reserve arithmetic at both bounds, trim trigger and target, `keepNewest`, protected exclusion, zero and pathological budgets |
 | `ThermalPolicyTest` | 25 | Immediate escalation, the 90 s de-escalation hold, single-step descent, signal priority, battery fallback only when nothing better exists |
 | `ProtectionPlannerTest` | 25 | Overlap-not-containment, boundary-straddling events claiming both segments, in-progress segments counting only to *now*, crash-interrupted recovery |
+| `PlaceRankingTest` | 14 | Which suburb, town or city a coordinate is named after, against the places decoded from the real archives around Canberra: the 3/8/20 km radii, population settling Canberra over Queanbeyan, towns never standing in for cities, duplicate collapse |
 | `MainChromeUiTest` | 24 | **Compose UI.** Start/stop mapping to recorder state, protect enabled across a rollover, every control's content description, status chips appearing and disappearing correctly |
 | `PreviewFitTest` | 19 | Auto fill-to-panel, the 1.35× ceiling, road bias, crop and letterbox reporting, degenerate inputs |
 | `ImpactDetectorTest` | 19 | Every detector stage: windowing, features, each discriminator, confidence arithmetic, cooldown |
@@ -37,6 +38,14 @@ build.
 | `PreviewFitTransformTest` | 14 | The preview fit as the viewfinder applies it: absolute uniform scale, the Auto ceiling, centring in the non-overflowing axis, the road bias only where there *is* vertical overflow, and the landscape geometry that used to clip the top and band the bottom |
 | `LocationRequestsTest` | 16 | Shared ownership of the GNSS receiver: shortest interval wins, releasing one client leaves the others running, and thermal throttling of the recorder cannot slow the map down |
 | `OverlayLayoutTest` | 18 | The burned-in overlay never draws one label over another: every ladder resolution in both orientations, all 63 non-empty field combinations, two font metrics, hostile strings, and the arrangement/shrink fallbacks |
+| `TripAssemblerTest` | 10 | The 2-minute gap rule that groups clips into trips and continues a trip after a relaunch, at the boundary, out of order, and with clocks that disagree |
+| `GalleryTripUiTest` | 10 | **Compose UI.** A trip card names the drive and its counts, hides its clips until asked, offers the track buttons only when a track exists, protects a whole trip from its menu, and still shows clips no trip has claimed |
+| `PmtilesReaderTest` | 9 | PMTiles tile ids per the spec, tile coordinates, and reading tiles through root and leaf directories and run-length entries of a hand-built archive, then decoding its `places` layer |
+| `GpxWriterTest` | 9 | The track is a valid GPX document before any point and after each one, reopens for appending, renames both `<name>` elements atomically, and reads back thinned for the route thumbnail |
+| `TripNamingTest` | 9 | Suburbs by default, cities between cities, towns alone in the country, loops, unknown ends and the time-based fallback |
+| `TrackPointFilterTest` | 8 | Five-metre movement, the 30 s stationary heartbeat that counts no distance, poor fixes ignored |
+| `RouteSketchTest` | 4 | Track points fitted into the unit square with their real proportions |
+| `RoadguardMigrationTest` | 2 | The 1→2 migration validated against the exported schemas, keeping an existing clip and adding the trip columns |
 | `PmtilesArchiveTest` | 18 | PMTiles v3 header parsing, and rejection of wrong-schema, raster, truncated, unsupported-version and too-coarse archives — each with a stated reason |
 | `MapAssetTest` | 12 | The shipped styles and map catalogue: the style/installer source-layer contract, asset-only glyphs and sprites, the layer budget, day/night structural parity, and every catalogue entry's size, zoom, URL and licence |
 | `ThemeUiTest` | 11 | **Compose UI.** All four themes; OLED being true black in every surface role and still true black under dynamic colour |
@@ -50,14 +59,14 @@ build.
 `PowerPolicy` import **nothing** from `android.*`. They take value types in and return value types
 out.
 
-That is the deliberate architectural choice that makes 264 pure-policy tests possible without a
+That is the deliberate architectural choice that makes 312 pure-policy tests possible without a
 device, and it means the questions a dashcam actually gets wrong — *when* does it delete, *when*
 does it reduce quality, *which* segments does an event protect, *is* that spike a collision — are
 all answered by code that is exhaustively exercised on every push.
 
 ## 3. Compose UI tests that run on the JVM
 
-67 of the 444 are real Compose UI tests: they compose the production composables, read the
+77 of the 522 are real Compose UI tests: they compose the production composables, read the
 semantics tree, and perform clicks. They live in `src/test` under Robolectric rather than in
 `src/androidTest`, which is a deliberate trade:
 
@@ -118,7 +127,9 @@ database or real hardware, and those paths are consequently unverified end to en
 | Map download → install → render | needs the network, the filesystem and a GPU. The *verification* step is now unit tested (`PmtilesArchiveTest`); the download, install and render steps are not |
 | `RecordingController`'s segment loop | needs a camera |
 | The foreground service surviving screen-off | needs a device; an emulator does not model vendor process-killing |
-| GPX writing, `FileProvider` sharing | needs a filesystem and another app to share to |
+| Opening or sharing a GPX track in another app | needs another app to receive it. The writer itself, the point filter and the renaming are unit tested (`GpxWriterTest`, `TrackPointFilterTest`) |
+| `TripRepository`, the reconciler's four trip steps, `StorageManager.pruneEmptyTrips` | need a real Room database and filesystem end to end; the rules they apply (`TripAssembler`, `TripNaming`, `PlaceRanking`) are unit tested |
+| Place lookup against the real archive on a phone | the reader and decoder are tested against a hand-built archive, and decoded the published archives during research over HTTP; nobody has run them on a device |
 
 ### 5.2 Nothing was run on hardware or an emulator
 
@@ -234,13 +245,39 @@ In priority order. Items 1–4 are the ones that would find a real bug fastest.
 28. TalkBack over the whole driving screen.
 29. Rotate on every screen and confirm no state is lost.
 
+### 6.9 Trips and tracks
+
+30. Record two short drives with recording stopped for **more than two minutes** between them, and
+    a third started **within two minutes** of the second ending. Expect two trip cards, the third
+    drive folded into the second.
+31. With the offline map installed, expect each trip named from its ends: suburbs across town
+    ("Harrison → Braddon" with "Canberra" underneath), cities when the drive crosses between two.
+    Note any trip whose name reads wrong, with its start and end coordinates: the radii in
+    `PlaceRanking` are the knob.
+32. Uninstall the map, record a trip, expect a time-based title and the hint; reinstall the map,
+    open Recordings, expect the name to appear without any further action.
+33. Tap **Open GPX track** with CoMaps or Organic Maps installed. Expect the chooser to offer it and
+    the track to open under the trip's name. Uninstall both and tap again: expect the share sheet
+    and the explanatory message, not an empty chooser.
+34. Kill the app mid-drive (`adb shell am force-stop`) and relaunch within two minutes. Expect the
+    same trip to continue and its GPX file to grow rather than a second file appearing.
+35. Turn **Save a GPX track of each trip** off mid-drive and on again. Expect the track to stop
+    growing and then resume into the same file.
+36. Delete every clip of a trip. Expect the trip card and its `.gpx` file to disappear together;
+    delete all but one protected clip and expect both to remain.
+37. Upgrade an install that has clips from before this version. Expect them grouped into trips on
+    the next start, with names once the map is present, and no clip missing from the list.
+
 ## 7. How to add a test
 
 * **A decision** — a threshold, a ladder, an arithmetic rule — goes in the pure policy layer and
   gets a JVM unit test. If it is hard to test, it is in the wrong layer.
 * **A UI contract** — a content description, a state-to-control mapping, a caption that must not
-  drift — goes in `src/test` as a Robolectric Compose test, following the four existing files.
+  drift — goes in `src/test` as a Robolectric Compose test, following the five existing files.
   Note that Compose's test rule allows **one `setContent` per test**; compose all the states you
   need in a single composition, or split the test.
+* **A schema change** ships with a migration in `RoadguardMigrations` and a case in
+  `RoadguardMigrationTest`, which validates it against the JSON Room exports under
+  `app/schemas/` (copied into the debug build's assets for exactly this purpose).
 * **Anything needing a real filesystem, database, camera or GPU** goes in `src/androidTest`. The
   emulator job is already wired and waiting for its first test.
