@@ -5,6 +5,7 @@ import io.github.tunlezah.roadguard.data.EventDao
 import io.github.tunlezah.roadguard.data.EventState
 import io.github.tunlezah.roadguard.data.SegmentDao
 import io.github.tunlezah.roadguard.data.SegmentEntity
+import io.github.tunlezah.roadguard.trip.TripRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -12,7 +13,7 @@ import java.io.File
 /**
  * Brings the index and the filesystem back into agreement, once, at start-up.
  *
- * Roadguard assumes the last run ended badly, because sooner or later it did. Five things can be
+ * Roadguard assumes the last run ended badly, because sooner or later it did. Nine things can be
  * out of step, and each has a defined repair:
  *
  * | Situation | Cause | Repair |
@@ -22,14 +23,20 @@ import java.io.File
  * | File with no row | crash between muxer finalise and index insert | inspect and adopt it |
  * | File with a protection sidecar but an unprotected row | crash between marking and indexing | re-apply protection |
  * | Event stuck awaiting post-roll | killed just after an impact | close it with whatever footage exists |
+ * | Clip with no trip | recorded before trips existed, or adopted above | group by the gap rule and assign |
+ * | Trip left recording | killed mid-drive | close it; its end is the last clip that finalised |
+ * | Trip with no clips | its footage left the loop while the app was not running | drop the row and its track |
+ * | GPX file with no trip | leftover of a dropped trip | delete it |
  *
  * The bias throughout is to **keep footage**. A file that cannot be verified is quarantined and
  * reported, never deleted: the segment that got truncated may be exactly the one the user needs.
+ * Tracks are the one thing that is deleted, and only once the footage they described is gone.
  */
 class StorageReconciler(
     private val storage: StorageManager,
     private val segments: SegmentDao,
     private val events: EventDao,
+    private val trips: TripRepository,
 ) {
 
     suspend fun reconcile(): ReconcileReport = withContext(Dispatchers.IO) {
@@ -149,6 +156,18 @@ class StorageReconciler(
             notes += "event ${event.id} was interrupted; protected ${overlapping.size} segment(s) that survived"
         }
 
+        // 6-9. Trips: group what has none, close what was interrupted, drop what is empty, and
+        // remove the tracks nothing refers to. Each step is guarded so a failure in trips can
+        // never undo the footage repairs above.
+        val tripsAssembled = runCatching { trips.assignUnassigned() }
+            .onFailure { Log.w(TAG, "could not assign clips to trips", it) }.getOrDefault(0)
+        val tripsClosed = runCatching { trips.closeInterrupted() }
+            .onFailure { Log.w(TAG, "could not close interrupted trips", it) }.getOrDefault(0)
+        val tripsPruned = runCatching { trips.pruneEmpty() }
+            .onFailure { Log.w(TAG, "could not prune empty trips", it) }.getOrDefault(0)
+        val tracksDeleted = runCatching { trips.deleteOrphanTracks() }
+            .onFailure { Log.w(TAG, "could not delete orphan tracks", it) }.getOrDefault(0)
+
         ReconcileReport(
             repairedIncomplete = repairedIncomplete,
             quarantined = quarantined,
@@ -157,6 +176,10 @@ class StorageReconciler(
             reprotected = reprotected,
             closedEvents = closedEvents,
             notes = notes,
+            tripsAssembled = tripsAssembled,
+            tripsClosed = tripsClosed,
+            tripsPruned = tripsPruned,
+            tracksDeleted = tracksDeleted,
         ).also { Log.i(TAG, "reconcile: $it") }
     }
 
@@ -216,9 +239,14 @@ data class ReconcileReport(
     val reprotected: Int,
     val closedEvents: Int,
     val notes: List<String>,
+    val tripsAssembled: Int = 0,
+    val tripsClosed: Int = 0,
+    val tripsPruned: Int = 0,
+    val tracksDeleted: Int = 0,
 ) {
     val changedAnything: Boolean
-        get() = repairedIncomplete + quarantined + droppedRows + adoptedFiles + reprotected + closedEvents > 0
+        get() = repairedIncomplete + quarantined + droppedRows + adoptedFiles + reprotected + closedEvents +
+            tripsAssembled + tripsClosed + tripsPruned + tracksDeleted > 0
 
     fun summary(): String = if (!changedAnything) {
         notes.firstOrNull() ?: "Storage was consistent"
@@ -230,6 +258,10 @@ data class ReconcileReport(
             if (quarantined > 0) add("$quarantined quarantined")
             if (droppedRows > 0) add("$droppedRows stale entries removed")
             if (closedEvents > 0) add("$closedEvents interrupted event(s) closed")
+            if (tripsAssembled > 0) add("$tripsAssembled clip(s) grouped into trips")
+            if (tripsClosed > 0) add("$tripsClosed interrupted trip(s) closed")
+            if (tripsPruned > 0) add("$tripsPruned empty trip(s) removed")
+            if (tracksDeleted > 0) add("$tracksDeleted orphan track(s) deleted")
         }.joinToString(", ")
     }
 }

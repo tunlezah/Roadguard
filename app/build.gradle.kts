@@ -121,6 +121,12 @@ android {
         }
     }
 
+    // The exported Room schemas ride along as *debug* assets (a few kilobytes, never in a release
+    // build) so RoadguardMigrationTest can run every migration against the exact schema each
+    // version shipped with. They cannot go in the test source set: Robolectric reads the app's
+    // merged assets, and AGP does not merge a unit-test source set's own assets.
+    sourceSets.getByName("debug").assets.srcDirs("$projectDir/schemas")
+
     lint {
         warningsAsErrors = false
         abortOnError = true

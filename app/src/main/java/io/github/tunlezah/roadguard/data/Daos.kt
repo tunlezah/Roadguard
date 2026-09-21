@@ -90,6 +90,23 @@ interface SegmentDao {
     @Query("SELECT * FROM segments WHERE eventId = :eventId ORDER BY startedAtEpochMs ASC")
     suspend fun forEvent(eventId: Long): List<SegmentEntity>
 
+    // ── Trips ─────────────────────────────────────────────────────────────────────────────
+
+    @Query("SELECT * FROM segments WHERE tripId IS NULL ORDER BY startedAtEpochMs ASC")
+    suspend fun unassigned(): List<SegmentEntity>
+
+    @Query("SELECT * FROM segments WHERE tripId = :tripId ORDER BY startedAtEpochMs ASC")
+    suspend fun forTrip(tripId: Long): List<SegmentEntity>
+
+    @Query("SELECT COUNT(*) FROM segments WHERE tripId = :tripId")
+    suspend fun countForTrip(tripId: Long): Int
+
+    @Query("UPDATE segments SET tripId = :tripId WHERE id IN (:ids)")
+    suspend fun assignTrip(ids: List<Long>, tripId: Long)
+
+    @Query("UPDATE segments SET endLatitude = :latitude, endLongitude = :longitude WHERE id = :id")
+    suspend fun setEndLocation(id: Long, latitude: Double?, longitude: Double?)
+
     /** Average bytes per second across recent complete segments, for storage estimates. */
     @Query(
         "SELECT CASE WHEN SUM(durationMs) > 0 THEN (SUM(sizeBytes) * 1000.0) / SUM(durationMs) ELSE 0 END " +
@@ -130,4 +147,45 @@ interface EventDao {
     suspend fun markProtected(id: Long) {
         byId(id)?.let { update(it.copy(state = EventState.Protected.name)) }
     }
+}
+
+@Dao
+interface TripDao {
+
+    @Insert
+    suspend fun insert(trip: TripEntity): Long
+
+    @Update
+    suspend fun update(trip: TripEntity)
+
+    @Query("SELECT * FROM trips WHERE id = :id")
+    suspend fun byId(id: Long): TripEntity?
+
+    @Query("SELECT * FROM trips ORDER BY startedAtEpochMs DESC")
+    fun observeAll(): Flow<List<TripEntity>>
+
+    @Query("SELECT * FROM trips ORDER BY startedAtEpochMs DESC")
+    suspend fun all(): List<TripEntity>
+
+    /** The most recently started trip, which is the only one a new recording could continue. */
+    @Query("SELECT * FROM trips ORDER BY startedAtEpochMs DESC LIMIT 1")
+    suspend fun latest(): TripEntity?
+
+    @Query("SELECT * FROM trips WHERE state = :state ORDER BY startedAtEpochMs ASC")
+    suspend fun byState(state: String): List<TripEntity>
+
+    @Query("SELECT trackFileName FROM trips WHERE trackFileName IS NOT NULL")
+    suspend fun allTrackFileNames(): List<String>
+
+    @Query("UPDATE trips SET endedAtEpochMs = :endedAtEpochMs, endLatitude = :latitude, endLongitude = :longitude WHERE id = :id")
+    suspend fun advanceEnd(id: Long, endedAtEpochMs: Long, latitude: Double?, longitude: Double?)
+
+    @Query("UPDATE trips SET trackFileName = :fileName WHERE id = :id")
+    suspend fun setTrackFile(id: Long, fileName: String?)
+
+    @Query("SELECT COUNT(*) FROM trips")
+    suspend fun count(): Int
+
+    @Query("DELETE FROM trips WHERE id = :id")
+    suspend fun deleteById(id: Long)
 }

@@ -389,10 +389,23 @@ fun SettingsScreen(
                     onClick = { dialog = SettingsDialog.SpeedUnit },
                 )
                 SettingsChoiceRow(
-                    title = "Store location data",
+                    title = "Location in the video",
                     iconRes = R.drawable.ic_privacy_tip,
                     currentLabel = settings.gpsStorage.label,
                     onClick = { dialog = SettingsDialog.GpsStorage },
+                )
+                SettingsSwitchRow(
+                    title = "Save a GPX track of each trip",
+                    subtitle = if (settings.locationEnabled) {
+                        "One file per trip, kept in Roadguard's own folder on this phone and deleted with the " +
+                            "trip's last clip. Open it in a map app, or share it, from Recordings."
+                    } else {
+                        "Needs location, which is turned off above."
+                    },
+                    iconRes = R.drawable.ic_route,
+                    checked = settings.saveGpxTrack,
+                    enabled = settings.locationEnabled,
+                    onCheckedChange = { on -> viewModel.update { it.copy(saveGpxTrack = on) } },
                 )
             }
 
@@ -733,16 +746,15 @@ fun SettingsScreen(
         )
 
         SettingsDialog.GpsStorage -> SettingsChoiceDialog(
-            title = "Store location data",
+            title = "Location in the video",
             options = GpsStorageMode.entries,
             currentValue = settings.gpsStorage,
             labelFor = { it.label },
             descriptionFor = { mode ->
                 buildList {
-                    if (mode.overlay) add("shown on screen and in the video")
-                    if (mode.metadata) add("written into the video file")
-                    if (mode.track) add("saved as a GPX track")
-                    if (isEmpty()) add("nothing is stored")
+                    if (mode.overlay) add("shown on screen and burned into the video")
+                    if (mode.metadata) add("written into the video file's metadata")
+                    if (isEmpty()) add("kept out of the video entirely")
                 }.joinToString(", ")
             },
             onPick = { value ->

@@ -231,7 +231,7 @@ class SettingsValidationTest {
             frameRate = FrameRateSetting.Fps60,
             microphoneEnabled = true,
             speedUnit = SpeedUnit.MilesPerHour,
-            gpsStorage = GpsStorageMode.All,
+            gpsStorage = GpsStorageMode.MetadataOnly,
             storageVolumeId = "sdcard-1",
             recordingZoom = 99.0f,
         )
@@ -240,7 +240,7 @@ class SettingsValidationTest {
         assertThat(validated.frameRate).isEqualTo(FrameRateSetting.Fps60)
         assertThat(validated.microphoneEnabled).isTrue()
         assertThat(validated.speedUnit).isEqualTo(SpeedUnit.MilesPerHour)
-        assertThat(validated.gpsStorage).isEqualTo(GpsStorageMode.All)
+        assertThat(validated.gpsStorage).isEqualTo(GpsStorageMode.MetadataOnly)
         assertThat(validated.storageVolumeId).isEqualTo("sdcard-1")
         // ...while still clamping the one numeric field that was out of range.
         assertThat(validated.recordingZoom).isEqualTo(8.0f)
@@ -314,14 +314,12 @@ class SettingsValidationTest {
 
     // ── GpsStorageMode flag table ─────────────────────────────────────────────────────
 
-    /** The (overlay, metadata, track) triple each mode's name promises. */
-    private val expectedGpsFlags: Map<GpsStorageMode, Triple<Boolean, Boolean, Boolean>> = mapOf(
-        GpsStorageMode.None to Triple(false, false, false),
-        GpsStorageMode.OverlayOnly to Triple(true, false, false),
-        GpsStorageMode.MetadataOnly to Triple(false, true, false),
-        GpsStorageMode.TrackOnly to Triple(false, false, true),
-        GpsStorageMode.OverlayAndMetadata to Triple(true, true, false),
-        GpsStorageMode.All to Triple(true, true, true),
+    /** The (overlay, metadata) pair each mode's name promises. */
+    private val expectedGpsFlags: Map<GpsStorageMode, Pair<Boolean, Boolean>> = mapOf(
+        GpsStorageMode.None to Pair(false, false),
+        GpsStorageMode.OverlayOnly to Pair(true, false),
+        GpsStorageMode.MetadataOnly to Pair(false, true),
+        GpsStorageMode.OverlayAndMetadata to Pair(true, true),
     )
 
     @Test
@@ -333,32 +331,56 @@ class SettingsValidationTest {
     fun `every GpsStorageMode entry exposes the flags its name promises`() {
         for (mode in GpsStorageMode.entries) {
             val expected = requireNotNull(expectedGpsFlags[mode]) {
-                "No expected flag triple declared for GpsStorageMode.$mode"
+                "No expected flag pair declared for GpsStorageMode.$mode"
             }
             assertWithMessage("%s.overlay", mode.name).that(mode.overlay).isEqualTo(expected.first)
             assertWithMessage("%s.metadata", mode.name).that(mode.metadata).isEqualTo(expected.second)
-            assertWithMessage("%s.track", mode.name).that(mode.track).isEqualTo(expected.third)
             assertWithMessage("%s.label", mode.name).that(mode.label).isNotEmpty()
         }
     }
 
     @Test
-    fun `None stores nothing and All stores everything`() {
+    fun `None keeps location out of the video and OverlayAndMetadata puts it in both places`() {
         val none = GpsStorageMode.None
-        assertThat(listOf(none.overlay, none.metadata, none.track))
-            .containsExactly(false, false, false)
-        val all = GpsStorageMode.All
-        assertThat(listOf(all.overlay, all.metadata, all.track))
-            .containsExactly(true, true, true)
+        assertThat(listOf(none.overlay, none.metadata)).containsExactly(false, false)
+        val both = GpsStorageMode.OverlayAndMetadata
+        assertThat(listOf(both.overlay, both.metadata)).containsExactly(true, true)
     }
 
     @Test
-    fun `the default GPS mode burns in an overlay and tags metadata but writes no GPX track`() {
+    fun `the default GPS mode burns in an overlay and tags metadata`() {
         val mode = Settings().gpsStorage
         assertThat(mode).isEqualTo(GpsStorageMode.OverlayAndMetadata)
         assertThat(mode.overlay).isTrue()
         assertThat(mode.metadata).isTrue()
-        assertThat(mode.track).isFalse()
+    }
+
+    // ── The GPX track switch ──────────────────────────────────────────────────────────
+
+    @Test
+    fun `the GPX track is on by default`() {
+        // Chosen by the product owner: the track is what lets a drive be opened in a map app, and
+        // it never leaves the phone unless the user shares it.
+        assertThat(Settings().saveGpxTrack).isTrue()
+    }
+
+    @Test
+    fun `the removed GPS modes map onto the video mode they implied plus the track switch`() {
+        // "GPX track only" kept location out of the video; "All" put it everywhere. Both wrote a
+        // track, which is now its own switch. An upgrade must change nothing the user chose.
+        assertThat(SettingsRepository.legacyGpsStorage("TrackOnly"))
+            .isEqualTo(GpsStorageMode.None to true)
+        assertThat(SettingsRepository.legacyGpsStorage("All"))
+            .isEqualTo(GpsStorageMode.OverlayAndMetadata to true)
+    }
+
+    @Test
+    fun `current and unknown GPS mode names are not treated as legacy`() {
+        for (mode in GpsStorageMode.entries) {
+            assertWithMessage(mode.name).that(SettingsRepository.legacyGpsStorage(mode.name)).isNull()
+        }
+        assertThat(SettingsRepository.legacyGpsStorage("Everything")).isNull()
+        assertThat(SettingsRepository.legacyGpsStorage(null)).isNull()
     }
 
     // ── Preset lists ──────────────────────────────────────────────────────────────────

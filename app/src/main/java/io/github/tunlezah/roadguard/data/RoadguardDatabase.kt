@@ -18,8 +18,8 @@ import androidx.room.RoomDatabase
  * orphan protected footage. Schema changes ship with explicit migrations.
  */
 @Database(
-    entities = [SegmentEntity::class, EventEntity::class],
-    version = 1,
+    entities = [SegmentEntity::class, EventEntity::class, TripEntity::class],
+    version = 2,
     exportSchema = true,
 )
 abstract class RoadguardDatabase : RoomDatabase() {
@@ -28,11 +28,14 @@ abstract class RoadguardDatabase : RoomDatabase() {
 
     abstract fun events(): EventDao
 
+    abstract fun trips(): TripDao
+
     companion object {
         private const val NAME = "roadguard-index.db"
 
         fun create(context: Context): RoadguardDatabase =
             Room.databaseBuilder(context.applicationContext, RoadguardDatabase::class.java, NAME)
+                .addMigrations(*RoadguardMigrations.ALL)
                 .build()
 
         fun createInMemory(context: Context): RoadguardDatabase =

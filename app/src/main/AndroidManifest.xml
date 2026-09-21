@@ -52,6 +52,18 @@
            HIGH_SAMPLING_RATE_SENSORS            - the impact detector samples at 100 Hz, under the
                                                    200 Hz threshold that would require it. -->
 
+    <!--
+      Package visibility: Roadguard offers to open a trip's GPX track in a map app, and needs to
+      know whether one is installed so it can fall back to the share sheet instead of showing an
+      empty chooser. This declares that one question and nothing more; it grants no access.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="application/gpx+xml" />
+        </intent>
+    </queries>
+
     <uses-feature android:name="android.hardware.camera.any" android:required="true" />
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
     <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />

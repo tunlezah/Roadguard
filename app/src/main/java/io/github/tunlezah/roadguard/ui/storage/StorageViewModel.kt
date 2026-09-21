@@ -159,7 +159,11 @@ class StorageViewModel(application: Application) : AndroidViewModel(application)
             if (gone) storage.removeProtectionSidecar(entity.fileName)
             gone
         }
-        if (deleted) segments.deleteById(segmentId)
+        if (deleted) {
+            segments.deleteById(segmentId)
+            // The trip and its GPX track go with the last clip, here as on every other delete path.
+            entity.tripId?.let { storage.pruneEmptyTrips(listOf(it)) }
+        }
         measureAll(container.settings.value.loopBudgetBytes)
         post(
             if (deleted) {

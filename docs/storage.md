@@ -16,7 +16,7 @@ Everything sits under the app's own external files directory —
 | --- | --- |
 | `recordings/` | loop segments (`.mp4`) and protection sidecars (`.protected.json`) |
 | `quarantine/` | files the inspector could not verify — kept, never deleted |
-| `tracks/` | GPX tracks, when the user has enabled track storage |
+| `tracks/` | one GPX track per trip, while the GPX switch is on (the default); deleted with the trip's last clip — see [`trips-and-tracks.md`](trips-and-tracks.md) |
 | `diagnostics/` | exported diagnostics reports |
 | `maps/` | the installed offline map archive |
 | `.nomedia` | keeps thousands of loop segments out of the user's gallery |
@@ -121,7 +121,7 @@ design. It also means protection survives total loss of the database.
 
 Roadguard assumes the last run ended badly, because sooner or later it did.
 `StorageReconciler` runs once at start-up, before the recorder can index anything, and repairs
-five defined divergences:
+nine defined divergences:
 
 | Situation | Cause | Repair |
 | --- | --- | --- |
@@ -130,6 +130,10 @@ five defined divergences:
 | File with no row | crash between muxer finalise and index insert | inspect and adopt it |
 | File with a protection sidecar but an unprotected row | crash between marking and indexing | re-apply protection |
 | Event stuck awaiting post-roll | killed just after an impact | close it with whatever footage exists |
+| Clip with no trip | recorded before trips existed, or adopted above | group by the 2-minute gap rule and assign |
+| Trip left recording | killed mid-drive | close it; its end is the last clip that finalised |
+| Trip with no clips | its footage left the loop while the app was not running | drop the row and its GPX track |
+| GPX file with no trip | leftover of a dropped trip | delete it |
 
 **The bias throughout is to keep footage.** A file that cannot be verified is moved to
 `quarantine/` and reported — never deleted. The truncated segment may be exactly the one the
@@ -182,6 +186,7 @@ those figures are calculated, not measured on the target hardware.
 | --- | --- |
 | Reserve, budget, trim trigger/target arithmetic, including edge cases at zero and at the cap | **Verified** — `StorageBudgetTest`, 32 JVM tests, passing |
 | `keepNewest` prevents deleting the newest segments under any budget | **Verified** — unit tested |
+| A trip and its GPX track are removed only once its last clip is gone, never while recording | **Implemented and reviewed;** the pruning runs inside the same cleanup and delete paths as the footage, and needs a real Room database to test end to end |
 | Protected segments are never cleanup candidates | **Verified** — unit tested |
 | Reconciler repair table | **Implemented and reviewed; not covered by an end-to-end test.** Reconciliation needs a real filesystem and a real Room database, which is an instrumentation test — see `docs/testing.md` |
 | Behaviour when a microSD card is physically removed mid-recording | **Not verified.** No device was available |

@@ -20,6 +20,7 @@ import androidx.room.PrimaryKey
         Index("startedAtEpochMs"),
         Index("isProtected"),
         Index("eventId"),
+        Index("tripId"),
         Index(value = ["fileName"], unique = true),
     ],
 )
@@ -65,7 +66,74 @@ data class SegmentEntity(
     /** First fix seen while this segment was recording, if location was available. */
     @ColumnInfo(name = "startLatitude") val startLatitude: Double? = null,
     @ColumnInfo(name = "startLongitude") val startLongitude: Double? = null,
+
+    /**
+     * The trip this clip belongs to; see [TripEntity].
+     *
+     * Null only for a clip recorded before trips existed or adopted from disk, and then only until
+     * start-up reconciliation groups it. The gallery still shows such a clip, under a heading of
+     * its own, rather than hiding footage over a missing label.
+     */
+    val tripId: Long? = null,
+
+    /** Last fix seen while this segment was recording, written when it finalised. */
+    @ColumnInfo(name = "endLatitude") val endLatitude: Double? = null,
+    @ColumnInfo(name = "endLongitude") val endLongitude: Double? = null,
 )
+
+/**
+ * One drive: a run of clips with no gap longer than
+ * [io.github.tunlezah.roadguard.trip.TripAssembler.MAX_GAP_MS] between them.
+ *
+ * A trip is what a person remembers ("the run to Braddon on Saturday"), so it is what the
+ * recordings list is organised around. It carries the two ends of the drive as coordinates and as
+ * names resolved from the offline map, and it owns the GPX track written while it was recorded.
+ *
+ * The end fields are advanced every time a clip finalises, not just when the trip closes, so a
+ * process death mid-drive still leaves a trip whose end is at most one clip stale.
+ *
+ * @param startPlace fine-grained name for the start: a suburb, or a town where there is no suburb.
+ * @param startArea coarse name for the start: the city, when one is within reach. See
+ *   [io.github.tunlezah.roadguard.trip.TripNaming] for how the two levels become a title.
+ * @param namesResolved true once a lookup has been run against an installed map, whatever it
+ *   found; false means "not tried yet, or no map was installed", so the gallery knows to retry.
+ * @param trackFileName GPX file within the tracks directory, or null when no track was written.
+ * @param distanceMetres distance along the recorded track, summed between accepted fixes.
+ */
+@Entity(
+    tableName = "trips",
+    indices = [Index("startedAtEpochMs"), Index("state")],
+)
+data class TripEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+
+    val startedAtEpochMs: Long,
+    val endedAtEpochMs: Long,
+
+    /** [TripState] name. */
+    val state: String,
+
+    val startLatitude: Double? = null,
+    val startLongitude: Double? = null,
+    val endLatitude: Double? = null,
+    val endLongitude: Double? = null,
+
+    val startPlace: String? = null,
+    val startArea: String? = null,
+    val endPlace: String? = null,
+    val endArea: String? = null,
+    val namesResolved: Boolean = false,
+
+    val trackFileName: String? = null,
+    val trackPointCount: Int = 0,
+    val distanceMetres: Long = 0,
+) {
+    val isRecording: Boolean get() = state == TripState.Recording.name
+    val durationMs: Long get() = (endedAtEpochMs - startedAtEpochMs).coerceAtLeast(0L)
+}
+
+/** Whether a trip is still being recorded. A trip left `Recording` at start-up was interrupted. */
+enum class TripState { Recording, Closed }
 
 /** A detected or manually requested protection event. */
 @Entity(
