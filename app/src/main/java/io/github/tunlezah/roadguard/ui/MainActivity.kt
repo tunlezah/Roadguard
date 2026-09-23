@@ -17,6 +17,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import io.github.tunlezah.roadguard.location.LocationEngine
 import io.github.tunlezah.roadguard.core.RoadguardContainer
@@ -24,6 +25,7 @@ import io.github.tunlezah.roadguard.recording.RecordingService
 import io.github.tunlezah.roadguard.settings.OrientationMode
 import io.github.tunlezah.roadguard.settings.Settings as RoadguardSettings
 import io.github.tunlezah.roadguard.ui.theme.RoadguardTheme
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -48,6 +50,17 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
 
     private val container: RoadguardContainer by lazy { RoadguardContainer.from(this) }
+
+    /**
+     * True once recording has been started (by any route) during this Activity instance, so
+     * auto-start fires at most once per launch. It is an instance field, and the manifest
+     * declares configChanges for rotation, so a rotation does not reset it and does not
+     * re-trigger a start; a genuine cold launch makes a new Activity and re-arms it.
+     */
+    private var hasStartedRecordingThisLaunch = false
+
+    /** Set the first time auto-start is evaluated in this Activity instance, so it runs once. */
+    private var autoStartConsidered = false
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -94,6 +107,9 @@ class MainActivity : ComponentActivity() {
         } else {
             container.locationEngine.release(LocationEngine.Client.Ui)
         }
+        // Auto-start last, once the app is visible: a camera foreground service may only be
+        // promoted from a visible Activity, and onResume is exactly that moment.
+        maybeAutoStartRecording()
     }
 
     override fun onPause() {
@@ -168,7 +184,42 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startRecordingService() {
+        hasStartedRecordingThisLaunch = true
         RecordingService.start(this, RecordingService.ACTION_START)
+    }
+
+    /**
+     * Honours the "Start recording automatically" setting.
+     *
+     * The setting promises recording begins "when Roadguard opens", but nothing was wired to it:
+     * recording only ever started from the record button, the notification, first-run permission
+     * grant or power being connected. A user who relied on auto-start therefore opened the app,
+     * saw the live preview, drove off and later found nothing had been recorded. This starts the
+     * recording service once per launch when the setting is on, setup is done and the camera
+     * permission is held; the controller applies the configured start-up delay and ignores the
+     * request if a recording is already running or being torn down.
+     */
+    private fun maybeAutoStartRecording() {
+        if (autoStartConsidered || hasStartedRecordingThisLaunch) return
+        autoStartConsidered = true
+        // Read the *persisted* settings, not the hot snapshot: on a cold launch that snapshot
+        // can still hold the compiled-in defaults (setupComplete = false) until DataStore's
+        // first read lands, which would silently skip auto-start for exactly the user who
+        // relies on it. first() waits for the real value.
+        lifecycleScope.launch {
+            val settings = container.settingsRepository.settings.first()
+            if (hasStartedRecordingThisLaunch) return@launch
+            if (!settings.setupComplete || !settings.autoStartRecording) return@launch
+            val cameraGranted = ContextCompat.checkSelfPermission(
+                this@MainActivity,
+                Manifest.permission.CAMERA,
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (!cameraGranted) return@launch
+            // A camera foreground service may only be promoted from a visible Activity, so do
+            // not start once the app has slipped into the background while we were reading.
+            if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return@launch
+            startRecordingService()
+        }
     }
 
     /** Opens this app's system settings page, for a permanently denied permission. */

@@ -15,7 +15,7 @@
 ./gradlew :app:testDebugUnitTest
 ```
 
-**522 tests. 0 failures. 0 errors. 0 skipped.** About 50 seconds of test execution on a warm
+**523 tests. 0 failures. 0 errors. 0 skipped.** About 50 seconds of test execution on a warm
 build.
 
 | Suite | Tests | What it holds in place |
@@ -30,6 +30,7 @@ build.
 | `PreviewFitTest` | 19 | Auto fill-to-panel, the 1.35× ceiling, road bias, crop and letterbox reporting, degenerate inputs |
 | `ImpactDetectorTest` | 19 | Every detector stage: windowing, features, each discriminator, confidence arithmetic, cooldown |
 | `SegmentPlannerTest` | 18 | Rollover reason priority, the 20-second minimum, queued reconfiguration |
+| `RecordingControllerStopTest` | 1 | A user-initiated stop settles on *Idle*, never parking in the transient *Stopping* state |
 | `SettingsComponentsUiTest` | 16 | **Compose UI.** Disabled rows still explaining themselves, the picker showing unsupported options greyed with a reason, sliders announcing values in words |
 | `SensorTraceTest` | 16 | Synthetic pothole / speed-bump / handling / braking / impact traces classifying as intended |
 | `DeviceTierScorerTest` | 16 | Every scoring combination, and both vetoes (`isLowRamDevice`, no hardware 1080p encoder) |
@@ -66,7 +67,7 @@ all answered by code that is exhaustively exercised on every push.
 
 ## 3. Compose UI tests that run on the JVM
 
-77 of the 522 are real Compose UI tests: they compose the production composables, read the
+77 of the 523 are real Compose UI tests: they compose the production composables, read the
 semantics tree, and perform clicks. They live in `src/test` under Robolectric rather than in
 `src/androidTest`, which is a deliberate trade:
 

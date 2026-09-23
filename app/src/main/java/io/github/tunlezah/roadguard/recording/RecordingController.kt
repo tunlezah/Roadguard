@@ -246,7 +246,11 @@ class RecordingController(
     }
 
     fun stop() {
-        scope.launch { stopInternal(RecorderStatus.Stopping) }
+        // Terminal status is Idle, not Stopping: Stopping is the transient state shown *while*
+        // the segment is being finalised (set at the top of stopInternal). Passing Stopping here
+        // left the recorder parked in "Stopping" forever after a normal stop -- the UI chip and
+        // the notification never cleared -- because nothing else moves it out of that state.
+        scope.launch { stopInternal(RecorderStatus.Idle) }
     }
 
     /** Protects the current and preceding footage at the user's request. */
