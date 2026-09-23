@@ -96,6 +96,21 @@ class RoadguardContainer(private val appContext: Context) {
     }
 
     /**
+     * The most recent start-up reconciliation result, and when it ran, exposed so Diagnostics
+     * can show exactly what the last start repaired, dropped or quarantined. It is the single
+     * most useful signal when footage appears to be missing: it distinguishes "nothing was ever
+     * written" from "clips were written and then quarantined or dropped". Null until
+     * [onApplicationCreate] has run the reconcile once this process.
+     */
+    @Volatile
+    var lastReconcileReport: io.github.tunlezah.roadguard.storage.ReconcileReport? = null
+        private set
+
+    @Volatile
+    var lastReconcileAtEpochMs: Long? = null
+        private set
+
+    /**
      * Place names from the installed offline map. Reads the same archive the map renders from, so
      * naming a trip needs no network and no extra download.
      */
@@ -199,6 +214,8 @@ class RoadguardContainer(private val appContext: Context) {
             weatherRepository = weatherRepository,
             segments = database.segments(),
             events = database.events(),
+            reconcileReport = { lastReconcileReport },
+            reconcileAtEpochMs = { lastReconcileAtEpochMs },
         )
     }
 
@@ -218,6 +235,10 @@ class RoadguardContainer(private val appContext: Context) {
             val loaded = settingsRepository.settings.first()
             storageManager.useVolume(loaded.storageVolumeId)
             runCatching { storageReconciler.reconcile() }
+                .onSuccess { report ->
+                    lastReconcileReport = report
+                    lastReconcileAtEpochMs = System.currentTimeMillis()
+                }
             runCatching { storageManager.refresh(loaded.loopBudgetBytes) }
         }
     }
