@@ -29,6 +29,19 @@ it is your action.
 4. **Diagnostics → Camera.** If no camera reports supported qualities, CameraX has not
    initialised; restart the app and check for a camera-service error in the recent events list.
 
+### Recording did not start when I opened the app
+
+**Settings → Startup → Start recording automatically** starts a recording when Roadguard is opened,
+after the configured start-up delay. If it is on and nothing happens:
+
+1. **Camera permission.** Auto-start is skipped silently when the camera permission is not held,
+   so grant it first (Settings → Apps → Roadguard → Permissions).
+2. **It starts once per launch.** Auto-start fires when the app is brought to the foreground on a
+   fresh launch, not every time you return from another screen, and not after you have manually
+   stopped a recording in the same session. Reopen the app to arm it again.
+3. **It cannot start while the app is in the background** — see *Recording did not start on boot*
+   below for why a camera service can only be promoted from a visible screen.
+
 ### Recording stops on its own
 
 Check Diagnostics → recent recorder events first; the reason is recorded there.
@@ -43,6 +56,47 @@ Check Diagnostics → recent recorder events first; the reason is recorded there
 Heat is **not** on this list. Roadguard never stops recording for thermal reasons — it reduces
 quality instead. If recording stopped and Diagnostics shows a high thermal level, look for a
 different cause.
+
+### The Stop button is stuck on “Stopping”
+
+Pressing Stop shows **Stopping** while the current clip is finalised, then returns to **Not
+recording**. If it ever appeared to hang on *Stopping* forever, that was a state-machine defect:
+the finished clip was already saved, but the recorder was parked in the transient *Stopping*
+state and the chip and notification never cleared. It is fixed — a normal stop now settles on
+*Not recording*.
+
+The reason it mattered beyond cosmetics: a user who believes Stop did not work is likely to
+force-stop the app, and force-stopping mid-clip is exactly what truncates the current segment
+(see the next entry). A Stop that visibly completes avoids that.
+
+### I recorded, but the files are not there
+
+First, where the files are: Roadguard writes to its own app storage,
+`Android/data/io.github.tunlezah.roadguard/files/recordings/` (`…roadguard.debug/…` for a debug
+build). A `.nomedia` marker keeps thousands of clips out of the Photos/Gallery app, and on
+Android 11+ many third-party file managers cannot browse `Android/data/` at all. **Browse the
+recordings inside Roadguard** (the Recordings screen), over USB/MTP from a computer, or through
+the app's Share action — not the phone's gallery.
+
+If the in-app Recordings list itself is empty or missing a drive:
+
+| What happened | Why | What you see |
+| --- | --- | --- |
+| The app was killed mid-clip | battery optimisation, a vendor "app sleep" list, swiping the app away on some launchers, or a power cut at ignition-off. An MP4 only becomes playable when its index is written **at the end** of the clip, so a clip cut off in the middle has no index | the interrupted clip is moved to `quarantine/` on the next start — the quarantine count in **Diagnostics → storage** rises — rather than shown as a normal recording. A drive shorter than one segment (default 3 min) that ends in a kill can leave *nothing* in the list |
+| The encoder failed repeatedly | a device whose hardware encoder rejects the stream | each failed clip is quarantined and the reason is in the recent events list |
+| A microSD card was chosen and is not mounted | the card was ejected or slow to mount | Roadguard stands down rather than dropping the index or scattering footage onto internal storage; re-seat the card |
+
+**The single most effective fix** for the first row — by far the most common — is to stop the
+platform killing the app: Settings → Apps → Roadguard → Battery → **Unrestricted**, and remove
+Roadguard from every vendor "deep sleep"/"app sleep" list. See *Recording stops when the screen
+turns off* below; the same platform behaviour is behind both symptoms. Shorter segments (Settings
+→ Recording) also shrink how much a single interruption can cost, because only the clip in
+progress is ever at risk.
+
+A quarantined clip is **not** deleted — the video data is usually all there, just without its
+index. It can be recovered on a computer with a tool such as `untrunc` or `ffmpeg`. Roadguard
+deliberately does not attempt that repair itself; doing it inside the recorder that is about to
+record again would be riskier than keeping the file intact and saying so.
 
 ### Recording stops when the screen turns off
 
