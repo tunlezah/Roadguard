@@ -91,6 +91,10 @@ enum class MapRenderBudget(val label: String) {
  * settings and the device profile, and only ever reduces.
  *
  * @property qualityStepDown how many steps down the resolution ladder to move.
+ * @property qualityCeiling the richest CameraX quality allowed (`"HD"` for 720p), or null for no
+ *   ceiling. The thermal ladder never sets it; battery-safe mode does
+ *   ([io.github.tunlezah.roadguard.power.PowerPolicy.restrain]). A ceiling rather than another
+ *   step down, so a device already recording 720p is not pushed to 480p just to save power.
  * @property requiresRebind true when applying this plan needs the camera use cases rebound,
  *   which Roadguard only ever does at a segment boundary so a recording is never cut short.
  */
@@ -111,6 +115,7 @@ data class ThermalPlan(
     val detachPreviewWhenHidden: Boolean,
     val warnUser: Boolean,
     val userMessage: String?,
+    val qualityCeiling: String? = null,
 ) {
     /**
      * True when moving from [previous] to this plan changes something the camera session
@@ -123,6 +128,7 @@ data class ThermalPlan(
             previous.bitrateScale != bitrateScale ||
             previous.allowVideoOverlay != allowVideoOverlay ||
             previous.allowSecondCamera != allowSecondCamera ||
-            previous.allowStabilisation != allowStabilisation
+            previous.allowStabilisation != allowStabilisation ||
+            previous.qualityCeiling != qualityCeiling
     }
 }

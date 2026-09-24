@@ -37,6 +37,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import io.github.tunlezah.roadguard.camera.PreviewFitResult
+import io.github.tunlezah.roadguard.map.MapWorkBudget
+import io.github.tunlezah.roadguard.power.PowerPolicy
+import io.github.tunlezah.roadguard.thermal.ThermalPolicy
 import io.github.tunlezah.roadguard.ui.PaneArrangement
 import io.github.tunlezah.roadguard.ui.RoadguardWindowInfo
 import io.github.tunlezah.roadguard.ui.rememberRoadguardWindowInfo
@@ -84,6 +87,13 @@ fun MainScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var splitFraction by rememberSaveable { mutableFloatStateOf(DEFAULT_SPLIT) }
     var previewFit by remember { mutableStateOf<PreviewFitResult?>(null) }
+
+    // The map obeys the thermal ladder and battery-safe mode: animation off when warm or saving
+    // power, taken off screen when hot. The map is never allowed to compete with the recorder.
+    val mapBudget = remember(state.recording.thermalLevel, state.recording.batterySafe) {
+        val plan = PowerPolicy.restrain(ThermalPolicy.planFor(state.recording.thermalLevel), state.recording.batterySafe)
+        MapWorkBudget.forRenderBudget(plan.mapRenderBudget)
+    }
 
     LaunchedEffect(state.recording.lastProtectionMessage) {
         state.recording.lastProtectionMessage?.let { snackbarHostState.showSnackbar(it) }
@@ -146,6 +156,7 @@ fun MainScreen(
                         onRetryInstall = onRetryMapInstall,
                         onHide = { onToggleMap(false) },
                         modifier = paneModifier,
+                        workBudget = mapBudget,
                     )
                 }
 

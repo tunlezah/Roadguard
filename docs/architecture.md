@@ -39,15 +39,16 @@ by anything else in the app.** Everything below follows from that.
                        │ ImpactDetector  ProtectionPlanner  PreviewFit│
                        │ SpeedFilter  PowerPolicy  TripAssembler      │
                        │ TripNaming  PlaceRanking  TrackPointFilter   │
+                       │ RecoveryPolicy                               │
                        └──────────────────────────────────────────────┘
 ```
 
 The bottom layer is the important one. `ThermalPolicy`, `StorageBudget`,
 `RecordingProfileSelector`, `DeviceTierScorer`, `ImpactDetector`, `ProtectionPlanner`,
-`SegmentPlanner`, `PreviewFit`, `SpeedFilter` and `PowerPolicy` import nothing from
-`android.*`. They take value types in and return value types out. That is why 312 pure-policy
+`SegmentPlanner`, `PreviewFit`, `SpeedFilter`, `PowerPolicy` and `RecoveryPolicy` import nothing
+from `android.*`. They take value types in and return value types out. That is why 458 plain-JVM
 unit tests can exercise the whole decision surface of the app — the thermal ladder, the storage
-arithmetic, the event discriminators — on a JVM, in 18 seconds, with no device.
+arithmetic, the event discriminators, the recovery schedule — in a few seconds, with no device.
 
 ## 2. Why a hand-written container instead of Hilt
 
@@ -84,8 +85,32 @@ Two platform facts shape this (`docs/research/android-platform-restrictions.md`)
    targetSdk 35+. Roadguard does not pretend otherwise; auto-start is "start when the app is
    opened, or when power is connected while the app is open", and the UI says so.
 
-A `camera` FGS keeps the *process* important but does not keep the *CPU* awake, so the
-controller holds a `PARTIAL_WAKE_LOCK` (12-hour timeout) for the duration of a recording.
+A `camera` FGS keeps the *process* important but does not keep the *CPU* awake, so the service
+holds a `PARTIAL_WAKE_LOCK` for exactly as long as `RecordingUiState.holdsWakeLock` says: from
+the moment a start begins until the session's last MP4 has been finalised. That is later than
+"recording" ends, on purpose: a file without its closing index is unplayable, and a low-battery
+stop with the screen off is exactly when the CPU would otherwise sleep in between. The lock
+carries a 60-minute timeout that is renewed every 10 minutes while it is needed, so a crashed
+component cannot leak it for longer than an hour. Recovery holds it for at most five minutes
+(§3.2).
+
+Three more platform facts shape the service:
+
+* **Foreground-service types follow the permissions.** On Android 14+ `startForeground` throws
+  for any type whose runtime permission is not held. `ForegroundServiceTypes` claims `location`
+  and `microphone` only when both the setting and the permission allow, and the service falls
+  back to `camera` alone rather than failing. It used to claim `location` whenever the setting
+  was on — the default — so a driver who declined location during setup got a service that
+  could never record. Types are widened only while the app is visible, the one time Android
+  allows it.
+* **A killed process cannot resume recording by itself.** `START_STICKY` restarts the service
+  with no intent, in the background, where the camera cannot be reopened. `SessionJournal`
+  remembers whether a session was running; if it was, the restarted service posts a one-tap
+  "resume recording" notification (the tap opens the Activity, which may start the camera) and
+  stops itself, rather than sitting in the foreground with a notification and no recording.
+* **Shutdown.** The service listens for `ACTION_SHUTDOWN` and spends up to six seconds of
+  Android's shutdown allowance closing the current file, so switching the phone off does not
+  truncate the last clip.
 
 ### 3.1 The segment loop
 
@@ -96,10 +121,11 @@ startSegment() ──► Recorder.start() ──► VideoRecordEvent.Status … 
       └──────────────── onFinalize(previous) ◄──── stop() then start() immediately
 ```
 
-Rollover is `recording.stop()` followed **synchronously, on the same thread, immediately** by
-`recorder.prepareRecording(...).start(...)`. CameraX's `Recorder` state machine explicitly
-queues a start issued while it is `STOPPING` and services it on finalize; that is the
-minimum-gap path AndroidX offers. A small gap remains unavoidable — the video `MediaCodec` is
+Rollover is `recording.stop()` followed immediately by the next
+`recorder.prepareRecording(...).start(...)`: the next file and its index row are prepared while
+the previous file is still finalising. CameraX's `Recorder` state machine explicitly queues a
+start issued while it is `STOPPING` and services it on finalize; that is the minimum-gap path
+AndroidX offers. A small gap remains unavoidable — the video `MediaCodec` is
 stopped and the next segment needs a fresh keyframe — and `docs/testing.md` records that this
 gap has not been measured on hardware.
 
@@ -120,11 +146,50 @@ camera mid-segment, because rebinding mid-segment means a truncated file.
 
 ### 3.2 Failure handling
 
-`RecordingController.handleFinalizeError` classifies every `VideoRecordEvent.Finalize.ERROR_*`
-value separately rather than treating "an error happened" as one case: insufficient storage
-triggers a trim and retry, an encoding error retries with a reduced profile, a source-inactive
-error rebinds the camera, and an unknown error backs off. `restartWithBackoff` gives up after
-`MAX_CONSECUTIVE_FAILURES = 5` and surfaces the reason rather than spinning.
+A session ends only when the user, the power policy or a nearly flat battery ends it. Anything
+else that stops the frames moves the recorder to `Recovering` — "Reconnecting" on screen and in
+the notification — and `RecoveryPolicy` brings it back:
+
+| Failure | Detected by | Recovery |
+| --- | --- | --- |
+| Camera lost to another app, or an error CameraX recovers from | `Finalize` with `ERROR_SOURCE_INACTIVE` | wait for CameraX to reopen the camera and resume the moment it does; every third attempt rebinds anyway |
+| Encoder or muxer failure; the recorder refuses a segment | a `Finalize` error, or `start()` throwing | rebuild the camera session |
+| Frames stop with no error at all | the watchdog: no progress for 15 s while "recording" | stop the recording and rebuild the camera session |
+| A configuration the camera refuses | the bind failing | fall back to 720p30, then 480p30, with no stabilisation, HDR, second camera or burn-in, and remember the refusal for the session |
+| Storage full, nothing left to trim | `ERROR_INSUFFICIENT_STORAGE` | trim, then retry once there is room |
+| Storage missing, typically a card removed | the next file cannot be created | retry until the volume is writable again |
+| A recording that ends by itself within 3 s | a normal `Finalize` for the active segment | treated as a failure, so a recorder that finalises every start at once cannot spin the loop |
+
+The schedule is 1, 2, 4, 8 and 15 seconds, then once a minute for as long as the session lasts.
+It used to give up after five consecutive failures — about thirty seconds — which turned every
+transient problem longer than half a minute into the end of recording for the rest of the drive.
+The driver is alerted after 30 seconds of reconnecting. The wake lock is held for the first five
+minutes of an episode; after that, attempts continue only while something else has the phone
+awake, so a long outage cannot become a long battery drain. An episode ends once a restarted
+recording has run cleanly for 20 seconds.
+
+A file that finalised with an error is *inspected*, not written off. CameraX documents that a
+recording which ran out of space still produces a valid file, so only a file `Mp4Inspector`
+cannot play is quarantined.
+
+### 3.3 Threading
+
+All controller state belongs to one serial dispatcher
+(`Dispatchers.Default.limitedParallelism(1)`), so recorder events, sensor samples, location fixes,
+the tick, settings, thermal and power changes are handled one at a time. The recorder's per-frame
+status callback is the one exception: it runs on the recorder thread, touches only volatile fields
+and the atomic state, and posts real work to the serial dispatcher. It publishes progress every
+five seconds rather than on every frame. Publishing thirty times a second used to rebuild and
+re-post the foreground notification for every encoded frame, which Android throttles to a few a
+second and partly drops.
+
+Every operation that can start, stop or rebind the camera — start, stop, rollover, recovery, the
+watchdog — holds one mutex and carries the session token it began under. Stop, detach and
+shutdown bump the token before anything else, so work belonging to the old session abandons at
+its next step. A Stop pressed during the start-up countdown, or landing mid-rollover, therefore
+can never be followed by a segment nobody asked for. A recovery attempt that has begun is never
+cancelled part-way; only one still waiting out its delay is replaced, because cancelling mid-bind
+would leave the camera bound to a configuration the controller has no record of.
 
 ## 4. Camera orientation — the boring, normal way
 

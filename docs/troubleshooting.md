@@ -44,18 +44,40 @@ after the configured start-up delay. If it is on and nothing happens:
 
 ### Recording stops on its own
 
-Check Diagnostics → recent recorder events first; the reason is recorded there.
+Only four things end a recording that you did not stop yourself:
 
 | Cause | What you will see | Fix |
 | --- | --- | --- |
-| Storage exhausted and nothing left to trim | an insufficient-storage finalise error, and a Storage screen full of protected files | unprotect or export protected footage |
-| Removable volume ejected | a source/volume error | re-seat the card. Roadguard deliberately does **not** silently fail over to internal storage — that would scatter one drive's footage across two devices |
-| Five consecutive failures | recording stopped after backoff | the underlying error is in recent events; this is a guard against thrashing, not the cause |
-| Android killed the process | recording simply ended | see "recording stops when the screen turns off" below |
+| The battery is nearly flat (3 % or less, not charging) | a "Roadguard stopped recording" alert naming the battery level | charge the phone. The last clip was closed cleanly before the phone could die mid-write |
+| A power-disconnect behaviour | recording stopped when you unplugged | see *Recording stopped when I unplugged* below |
+| Android killed the process | a "Recording was interrupted" notification | tap it to resume, then see *Recording stops when the screen turns off* below |
+| The phone was switched off | nothing to fix | the clip in progress was closed during shutdown |
 
-Heat is **not** on this list. Roadguard never stops recording for thermal reasons — it reduces
-quality instead. If recording stopped and Diagnostics shows a high thermal level, look for a
-different cause.
+Everything else — the camera taken by another app, an encoder error, a full or missing memory
+card, frames that stop arriving — does **not** end the recording. Roadguard shows
+**Reconnecting** and keeps trying; see the next entry.
+
+Heat is **not** on this list either. Roadguard never stops recording for thermal reasons — it
+reduces quality instead.
+
+### Recording says “Reconnecting”
+
+Something stopped the frames and Roadguard is bringing the recorder back. It retries after 1, 2,
+4, 8 and 15 seconds, then once a minute for as long as the session lasts, and resumes at once when
+the camera becomes available again. If it has not recovered after 30 seconds you get a
+"Recording interrupted" alert. The message on screen and in the notification says why:
+
+| Message | Usual cause | What to do |
+| --- | --- | --- |
+| *Another app is using the camera* or *The camera stopped supplying frames* | a video call, the stock camera app, a QR scanner | close the other app; recording resumes by itself |
+| *Storage is full* | the loop has nothing left it may delete, because protected footage fills the volume | unprotect or export protected footage |
+| *The recording location cannot be written* | the memory card was removed or has not mounted | re-seat the card; recording resumes when it is writable again. Roadguard deliberately does **not** fail over to internal storage — that would scatter one drive's footage across two devices |
+| *The camera refused the preferred settings; recording at …* | the camera would not run the chosen resolution, frame rate or effect | nothing: Roadguard is already recording at a safe fallback. Choose a lower setting to make it stick |
+| *The video encoder failed* or *The camera could not be configured* | a device or camera-service fault, usually transient | nothing, unless it persists; then restart the phone |
+
+To save battery, Roadguard keeps the phone awake for only the first five minutes of reconnecting.
+After that it still retries, but only while the phone is awake for some other reason — turning
+the screen on is enough. Press **Stop** if you do not want it to keep trying.
 
 ### The Stop button is stuck on “Stopping”
 
@@ -86,13 +108,15 @@ If the in-app Recordings list itself is empty or missing a drive:
 | The encoder failed repeatedly | a device whose hardware encoder rejects the stream | each failed clip is quarantined and the reason is in the recent events list |
 | A microSD card was chosen and is not mounted | the card was ejected or slow to mount | Roadguard stands down rather than dropping the index or scattering footage onto internal storage; re-seat the card |
 
-Why a *long* drive can also lose everything: once the app is killed, recording does **not**
-resume on its own. A camera service can only be started from a visible screen (the same reason
-there is no boot auto-start), so after a kill Roadguard sits idle until you reopen it, even
-though a foreground-service notification may still be showing. If the kill lands in the first
-few minutes, before the first segment finalises, a 30-minute drive can end with a single
-quarantined clip and nothing in the list. Reopen the app (or leave it in the foreground) and
-confirm the notification says *recording*, not *not recording*, partway through the drive.
+Why a *long* drive can also lose everything: once the app is killed, recording cannot resume on
+its own. A camera service can only be started from a visible screen (the same reason there is no
+boot auto-start). What Roadguard does instead is post a **"Recording was interrupted — tap to
+resume"** notification as soon as Android restarts its service; one tap reopens the app and
+starts recording again. If the kill lands in the first few minutes, before the first segment
+finalises, and nobody taps the notification, a 30-minute drive can still end with a single
+quarantined clip and nothing in the list. A vendor battery manager that *force-stops* the app
+cancels Android's service restart as well, so after that kind of kill there is no notification at
+all — one more reason to set Roadguard's battery use to **Unrestricted**.
 
 **To tell which of these is happening, open Settings → Diagnostics** and read three things:
 
@@ -125,8 +149,9 @@ record again would be riskier than keeping the file intact and saying so.
 
 ### Recording stops when the screen turns off
 
-Roadguard is designed to keep recording with the screen off, and holds a partial wake lock to do
-it. If it stops anyway, the platform is killing the process:
+Roadguard is designed to keep recording with the screen off, and holds a partial wake lock from
+the start of a recording until its last clip is closed. If it stops anyway, the platform is
+killing the process — you will see the "Recording was interrupted" notification:
 
 1. **Battery optimisation.** Settings → Apps → Roadguard → Battery → **Unrestricted**. This is
    the single most common cause on Motorola, Xiaomi, Samsung and Oppo devices. Roadguard
@@ -137,8 +162,8 @@ it. If it stops anyway, the platform is killing the process:
 3. **Do not swipe the app away from Recents while recording.** The service is
    `stopWithTask="false"`, so it survives — but some vendor launchers kill the process anyway.
    Use the Home button.
-4. Confirm the notification is still present. No notification means the foreground service is
-   gone, which is a platform kill, not an app bug.
+4. Confirm the recording notification is still present. No notification means the foreground
+   service is gone, which is a platform kill, not an app bug.
 
 ### Recording did not start on boot
 
@@ -190,8 +215,8 @@ separate *recording* zoom under advanced settings, which defaults to 1.0× and w
 
 There is, and it is small but not zero. Rolling over requires stopping the video encoder and
 starting a new file that begins with a fresh keyframe. Roadguard uses the minimum-gap path
-CameraX offers (`stop()` then an immediate same-thread `start()`, which the `Recorder` queues),
-but the gap is a property of the encoder, not of the app.
+CameraX offers (`stop()` then an immediate `start()`, which the `Recorder` queues until the
+previous file is closed), but the gap is a property of the encoder, not of the app.
 
 **The gap has not been measured on hardware.** No device was available. See `docs/testing.md`.
 
@@ -254,9 +279,13 @@ Recording is unaffected by all of these. The recorder has no dependency on the m
 
 ### The map is frozen or gone
 
-Deliberate, at thermal level `High` (frozen) and `Critical` (torn down). It comes back on its
-own once the device cools, after the 90-second de-escalation hold. Diagnostics shows the current
-level and its source.
+Deliberate, at thermal level `High` and `Critical`: the map is taken off screen, which frees its
+GPU work entirely, and a placeholder says it is paused for heat. It comes back on its own once
+the device cools, after the 90-second de-escalation hold. Diagnostics shows the current level and
+its source.
+
+At `Elevated`, and whenever battery-safe mode is on, the map stays but stops animating: it moves
+once per position fix and renders at most five frames a second.
 
 ### The map is stuttering
 
@@ -327,8 +356,25 @@ prefer a lower resolution over 4K.
 ### High battery drain
 
 Continuous video encoding plus a GPU-rendered map plus GNSS plus a lit display is close to the
-worst case for a phone. Roadguard is designed to run on a charger. `PowerPolicy` reduces work
-below 15 %, and Settings → Power offers four behaviours on disconnect.
+worst case for a phone. Roadguard is designed to run on a charger.
+
+On battery, **battery-safe mode** takes over when the phone's Battery Saver is on, when the
+battery reaches the threshold in Settings → Power (15 % by default), or as soon as you unplug if
+"On power disconnected" is set to the battery-safe profile. It never applies while charging. In
+battery-safe mode Roadguard:
+
+* lets the screen turn off instead of keeping it awake;
+* stops animating the map;
+* records at no more than 720p and 30 fps, without stabilisation, night assist or a second
+  camera — applied at the next clip boundary, so no clip is cut short;
+* takes a GPS fix every two seconds instead of every second.
+
+The timestamp and speed overlay and the bitrate are left alone. A flickering car charger does
+not make it flap: a change applies only once it has held for a minute.
+
+What costs the most, in order, if you want to go further by hand: the screen (Settings → Preview
+and display → *Keep the screen on*), the map (the *Hide the map* button on the driving screen),
+resolution above 1080p, 60 fps, and stabilisation.
 
 ### Recording stopped when I unplugged
 

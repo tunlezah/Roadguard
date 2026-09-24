@@ -13,8 +13,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.Collections
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Owns the recording directory: how much space is used, what may be deleted, and what to do
@@ -64,6 +66,21 @@ class StorageManager(
     @Volatile
     var requestedVolumeMissing: Boolean = false
         private set
+
+    /**
+     * Names of the segment and track files this process has created.
+     *
+     * Start-up reconciliation repairs what the *previous* run left behind. It must never judge a
+     * file this run is still writing: an MP4 has no index until it is finalised, so an in-progress
+     * segment looks exactly like a truncated one and would be quarantined out from under the
+     * recorder, and a new track looks like an orphan and would be deleted. The recorder normally
+     * waits for reconciliation before it writes anything; this set is what keeps the two apart if
+     * that wait ever times out.
+     */
+    private val createdThisProcess: MutableSet<String> = Collections.newSetFromMap(ConcurrentHashMap())
+
+    /** True when [fileName] was created by this process rather than inherited from an earlier run. */
+    fun isFromThisProcess(fileName: String): Boolean = fileName in createdThisProcess
 
     fun useVolume(volumeId: String?) {
         requestedVolumeMissing = volumeId != null &&
@@ -128,6 +145,17 @@ class StorageManager(
             // Belt and braces: never delete something now marked protected, even though the
             // query excluded it, because protection can be applied between query and delete.
             if (entity.isProtected) continue
+            // The sidecar is the copy of the protection mark that survives the index being wrong.
+            // If it exists the clip is protected, whatever the row says: restore the row and keep
+            // the file. Without this, a row that lost its flag -- a crash between the two writes,
+            // or anything else that ever wrote back a stale row -- would let the loop delete
+            // footage the user or an impact had protected.
+            if (hasProtectionSidecar(entity.fileName)) {
+                runCatching {
+                    segments.protect(listOf(entity.id), reason = "recovered from protection marker", eventId = entity.eventId)
+                }.onFailure { Log.w(TAG, "could not restore protection for ${entity.fileName}", it) }
+                continue
+            }
             val file = layout.file(StorageBucket.entries.first { it.dirName == entity.bucket }, entity.fileName)
             val existed = file.exists()
             if (!existed || file.delete()) {
@@ -176,6 +204,7 @@ class StorageManager(
             attempt++
             candidate = StorageLayout.trackFileName(startedAtEpochMs + attempt * 1_000L, ::fileTimestamp)
         }
+        createdThisProcess += candidate
         return File(layout.tracks, candidate)
     }
 
@@ -192,7 +221,12 @@ class StorageManager(
             ?.toList()
             .orEmpty()
 
-    /** Creates the file for the next segment. Never overwrites an existing file. */
+    /**
+     * Chooses the file for the next segment. Never overwrites an existing file.
+     *
+     * Does disk I/O (directory creation and existence checks), so callers keep it off the main
+     * thread.
+     */
     fun createSegmentFile(startedAtEpochMs: Long, sequence: Long): File {
         layout.ensureDirectories()
         var candidate = StorageLayout.segmentFileName(startedAtEpochMs, sequence, ::fileTimestamp)
@@ -201,6 +235,7 @@ class StorageManager(
             attempt++
             candidate = StorageLayout.segmentFileName(startedAtEpochMs, sequence + attempt, ::fileTimestamp)
         }
+        createdThisProcess += candidate
         return File(layout.recordings, candidate)
     }
 
@@ -236,8 +271,15 @@ class StorageManager(
     fun hasProtectionSidecar(fileName: String): Boolean = layout.protectionSidecar(fileName).exists()
 
     fun quarantine(file: File): File? {
-        val target = File(layout.quarantine, file.name)
         layout.quarantine.mkdirs()
+        // rename(2) silently replaces an existing target, which would destroy a file quarantined
+        // earlier under the same name. Quarantine exists to keep footage, so find a free name.
+        var target = File(layout.quarantine, file.name)
+        var attempt = 0
+        while (target.exists() && attempt < 100) {
+            attempt++
+            target = File(layout.quarantine, "${file.nameWithoutExtension}.$attempt.${file.extension}")
+        }
         return if (file.renameTo(target)) target else null
     }
 

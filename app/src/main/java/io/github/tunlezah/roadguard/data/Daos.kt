@@ -107,6 +107,22 @@ interface SegmentDao {
     @Query("UPDATE segments SET endLatitude = :latitude, endLongitude = :longitude WHERE id = :id")
     suspend fun setEndLocation(id: Long, latitude: Double?, longitude: Double?)
 
+    /**
+     * Records that a segment's file was finalised: its length, size and end position.
+     *
+     * A targeted UPDATE rather than an [Update] of a row read a moment earlier. An impact or a
+     * manual Protect can mark this very row protected while the finalise path is running, and
+     * writing back the stale copy would silently clear that mark -- after which the loop could
+     * delete the footage. This statement touches no protection column at all. A null end position
+     * keeps whatever the row already had.
+     */
+    @Query(
+        "UPDATE segments SET durationMs = :durationMs, sizeBytes = :sizeBytes, isComplete = 1, " +
+            "endLatitude = COALESCE(:endLatitude, endLatitude), " +
+            "endLongitude = COALESCE(:endLongitude, endLongitude) WHERE id = :id",
+    )
+    suspend fun markComplete(id: Long, durationMs: Long, sizeBytes: Long, endLatitude: Double?, endLongitude: Double?)
+
     /** Average bytes per second across recent complete segments, for storage estimates. */
     @Query(
         "SELECT CASE WHEN SUM(durationMs) > 0 THEN (SUM(sizeBytes) * 1000.0) / SUM(durationMs) ELSE 0 END " +

@@ -91,6 +91,15 @@ until `bytesToFree` is satisfied. Two guards:
 * **`keepNewest = 2`.** The two most recent unprotected segments are never deleted, no matter
   what the arithmetic says. A pathological budget cannot delete the footage recorded seconds
   ago — which, in a crash, is the only footage that matters.
+* **A sidecar outranks the index.** Before deleting a clip, cleanup checks for its
+  `.protected.json` sidecar. If one exists the clip is protected whatever its row says: the row
+  is re-protected and the file kept. That closes the second crash window in §5 for the loop as
+  well as for the reconciler.
+
+Finalising a clip updates only its duration, size, end position and completion flag. It used to
+write back a whole copy of the row read before the clip closed, which could silently undo a
+protection applied to that clip moments earlier — an impact near the end of a segment — and
+leave the footage for the loop to delete.
 
 When protected footage alone exceeds `protectedWarningBytes` (default 2 GB), the user is warned
 that protected files are consuming the volume. Roadguard does not resolve that for them: it is
@@ -142,6 +151,11 @@ user needs, and a human with a repair tool can do more with it than Roadguard ca
 `ReconcileReport` is surfaced in Diagnostics, so a user who lost power mid-drive can see
 precisely what was repaired.
 
+Reconciliation only ever judges what an *earlier* run left behind. The recorder waits up to ten
+seconds for it before writing anything, and files this process created are skipped regardless: an in-progress
+MP4 has no index yet, so it looks exactly like a truncated one and would otherwise be quarantined
+out from under the recorder.
+
 ## 7. Verifying a file
 
 `Mp4Inspector` performs a **top-level box scan** — it walks the MP4 box structure looking for
@@ -164,10 +178,12 @@ path of a dashcam would be a worse outcome than saying "this file is damaged, he
 
 | Failure | Behaviour |
 | --- | --- |
-| Card removed mid-recording | the finalise error is classified, the recording stops, and the UI reports the volume is gone. Roadguard does not silently switch volumes — that would scatter a drive's footage across two devices |
-| Volume full despite the reserve | trim, then retry; if the trim frees nothing (all protected), report and stop rather than thrash |
+| Card removed mid-recording | the recorder reports the volume is gone and keeps retrying; recording resumes by itself when the card is back. Roadguard does not silently switch volumes — that would scatter a drive's footage across two devices |
+| Volume full despite the reserve | trim, then retry; if the trim frees nothing (all protected), report it and retry once a minute rather than thrash |
 | Free space below the reserve at start-up | recording does not start; the Storage screen explains what to free |
-| Write error mid-segment | classified by `handleFinalizeError`, segment closed, new segment started, backoff after repeated failures (max 5 consecutive) |
+| Write error mid-segment | classified by `handleFinalizeError`; the file is inspected and kept if playable, and recording is restarted with backoff for as long as the session lasts (`docs/architecture.md` §3.2) |
+| Phone switched off while recording | the shutdown broadcast closes the current file first |
+| App killed while recording | the clip in progress is repaired or quarantined on the next start, and a notification offers to resume recording with one tap |
 | Database corrupt or deleted | the reconciler adopts every file it finds and re-applies protection from sidecars. No footage is lost |
 
 ## 9. Storage per hour

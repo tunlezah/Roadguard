@@ -1,19 +1,36 @@
 package io.github.tunlezah.roadguard.settings
 
 import android.content.Context
+import android.util.Log
 import androidx.datastore.core.DataStore
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
+import java.io.IOException
 
-private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "roadguard_settings")
+/**
+ * A corrupt settings file is replaced with defaults rather than thrown. Starting a recording
+ * reads the settings first, so a settings file that could not be parsed used to make every start
+ * fail, silently, for as long as the file stayed corrupt. Losing preferences is recoverable;
+ * a dashcam that cannot start is not.
+ */
+private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(
+    name = "roadguard_settings",
+    corruptionHandler = ReplaceFileCorruptionHandler { error ->
+        Log.e("RoadguardSettings", "settings file was corrupt; starting again from defaults", error)
+        emptyPreferences()
+    },
+)
 
 /**
  * Persists [Settings] in a Preferences DataStore.
@@ -25,7 +42,10 @@ private val Context.settingsDataStore: DataStore<Preferences> by preferencesData
  */
 class SettingsRepository(private val context: Context) {
 
-    val settings: Flow<Settings> = context.settingsDataStore.data.map { it.toSettings() }
+    val settings: Flow<Settings> = context.settingsDataStore.data
+        // A read error (as opposed to corruption) is treated the same way: defaults, not a crash.
+        .catch { error -> if (error is IOException) emit(emptyPreferences()) else throw error }
+        .map { it.toSettings() }
 
     suspend fun update(transform: (Settings) -> Settings) {
         context.settingsDataStore.edit { preferences ->

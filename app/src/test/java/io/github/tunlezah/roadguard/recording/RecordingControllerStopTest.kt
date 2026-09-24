@@ -25,6 +25,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
@@ -65,7 +66,7 @@ class RecordingControllerStopTest {
     @Test
     fun `a user-initiated stop leaves the recorder idle, not parked in stopping`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-        val controller = newController(scope = this)
+        val controller = newController(scope = this, dispatcher = StandardTestDispatcher(testScheduler))
 
         controller.stop()
         advanceUntilIdle()
@@ -73,7 +74,63 @@ class RecordingControllerStopTest {
         assertThat(controller.state.value.status).isEqualTo(RecorderStatus.Idle)
     }
 
-    private fun newController(scope: kotlinx.coroutines.CoroutineScope): RecordingController {
+    @Test
+    fun `stopping twice is harmless`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val controller = newController(scope = this, dispatcher = StandardTestDispatcher(testScheduler))
+
+        controller.stop()
+        controller.stop()
+        advanceUntilIdle()
+
+        assertThat(controller.state.value.status).isEqualTo(RecorderStatus.Idle)
+    }
+
+    @Test
+    fun `a stop overtakes a start that was requested just before it`() = runTest {
+        // The session token is read when start() is called, so a Stop pressed straight after
+        // wins even though the start has not run yet. Without that, the start could run after
+        // the stop and leave a recording going that the driver had just stopped.
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val controller = newController(scope = this, dispatcher = StandardTestDispatcher(testScheduler))
+
+        controller.start()
+        controller.stop()
+        advanceUntilIdle()
+
+        // Had the start run, it would have failed for want of the recording service and said so.
+        assertThat(controller.state.value.status).isEqualTo(RecorderStatus.Idle)
+        assertThat(controller.state.value.lastErrorMessage).isNull()
+    }
+
+    @Test
+    fun `a start without the recording service says so rather than sitting in starting`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val controller = newController(scope = this, dispatcher = StandardTestDispatcher(testScheduler))
+
+        controller.start()
+        advanceUntilIdle()
+
+        assertThat(controller.state.value.status).isEqualTo(RecorderStatus.Failed)
+        assertThat(controller.state.value.lastErrorMessage).isEqualTo("Recording service is not running")
+    }
+
+    @Test
+    fun `a shutdown with nothing recording returns at once and changes nothing`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val controller = newController(scope = this, dispatcher = StandardTestDispatcher(testScheduler))
+
+        controller.finalizeForShutdown(timeoutMs = 6_000)
+
+        assertThat(controller.state.value.status).isEqualTo(RecorderStatus.Idle)
+        assertThat(controller.state.value.lastErrorMessage).isNull()
+        assertThat(currentTime).isEqualTo(0L)
+    }
+
+    private fun newController(
+        scope: kotlinx.coroutines.CoroutineScope,
+        dispatcher: kotlinx.coroutines.CoroutineDispatcher,
+    ): RecordingController {
         val database = RoadguardDatabase.createInMemory(context)
         val storage = StorageManager(context, database.segments(), database.trips())
         val cameraSession = CameraSession(context)
@@ -102,6 +159,7 @@ class RecordingControllerStopTest {
             weatherState = MutableStateFlow<WeatherState>(
                 WeatherState.Unavailable(WeatherUnavailableReason.Disabled),
             ),
+            dispatcher = dispatcher,
         )
     }
 }

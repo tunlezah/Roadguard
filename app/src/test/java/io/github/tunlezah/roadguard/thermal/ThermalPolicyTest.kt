@@ -518,6 +518,7 @@ class ThermalPolicyTest {
             "allowVideoOverlay" to base.copy(allowVideoOverlay = false),
             "allowSecondCamera" to base.copy(allowSecondCamera = false),
             "allowStabilisation" to base.copy(allowStabilisation = false),
+            "qualityCeiling" to base.copy(qualityCeiling = "HD"),
         )
         for ((field, changed) in sessionChanges) {
             assertWithMessage("$field changed").that(changed.requiresRebindFrom(base)).isTrue()

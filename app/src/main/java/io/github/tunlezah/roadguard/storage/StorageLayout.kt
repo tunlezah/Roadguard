@@ -56,8 +56,18 @@ class StorageLayout(private val context: Context, val root: File) {
         StorageBucket.entries.forEach { dir(it) }
         // Nothing under here should ever be indexed by the media scanner or offered to a
         // gallery app; a .nomedia keeps thousands of loop segments out of the user's photos.
-        File(root, ".nomedia").takeIf { !it.exists() }?.createNewFile()
+        //
+        // Best effort: createNewFile throws when the volume is read-only or has gone away (a
+        // memory card mounted read-only after a filesystem error is the real case). That used to
+        // escape as an uncaught exception and take the whole process down at start-up, on every
+        // start. A missing marker only means a gallery may index the clips; the recorder reports
+        // an unwritable volume by itself when it tries to write.
+        runCatching { File(root, ".nomedia").takeIf { !it.exists() }?.createNewFile() }
     }
+
+    /** True when the recordings directory exists and can be written to right now. */
+    val isWritable: Boolean
+        get() = runCatching { recordings.let { it.isDirectory && it.canWrite() } }.getOrDefault(false)
 
     /** True when [root] sits on a removable volume rather than built-in storage. */
     val isRemovable: Boolean

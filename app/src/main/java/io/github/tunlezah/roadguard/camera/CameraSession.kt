@@ -18,6 +18,8 @@ import androidx.camera.video.QualitySelector
 import androidx.camera.video.Recorder
 import androidx.camera.video.VideoCapture
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LiveData
+import androidx.lifecycle.Observer
 import io.github.tunlezah.roadguard.capability.RecordingProfile
 import io.github.tunlezah.roadguard.overlay.VideoOverlayEffect
 import kotlinx.coroutines.guava.await
@@ -56,10 +58,18 @@ import android.util.Range as AndroidRange
 class CameraSession(private val context: Context) {
 
     private var provider: ProcessCameraProvider? = null
+
+    // Written on the main thread by bind/unbind, read from the recorder's own thread.
+    @Volatile
     private var camera: Camera? = null
+
+    @Volatile
     private var preview: Preview? = null
+
+    @Volatile
     private var videoCapture: VideoCapture<Recorder>? = null
     private var overlay: VideoOverlayEffect? = null
+    private var observedState: LiveData<CameraState>? = null
 
     private val _surfaceRequest = MutableStateFlow<SurfaceRequest?>(null)
 
@@ -74,6 +84,28 @@ class CameraSession(private val context: Context) {
 
     private val _cameraError = MutableStateFlow<CameraState.StateError?>(null)
     val cameraError: StateFlow<CameraState.StateError?> = _cameraError.asStateFlow()
+
+    private val _cameraOpen = MutableStateFlow(false)
+
+    /**
+     * True while the bound camera is actually open and streaming.
+     *
+     * False while it is opening, and -- the case that matters -- while another app holds it or it
+     * is recovering from an error. CameraX keeps a binding alive through those and reopens the
+     * camera by itself when it can; the recorder watches this to resume the moment it does,
+     * rather than rebinding on a timer and fighting CameraX's own reopen.
+     */
+    val cameraOpen: StateFlow<Boolean> = _cameraOpen.asStateFlow()
+
+    val isCameraOpen: Boolean get() = _cameraOpen.value
+
+    // One observer instance, moved from binding to binding. A fresh lambda per bind would pile a
+    // new observer onto the same CameraInfo's state every time the recorder rebinds.
+    private val stateObserver = Observer<CameraState> { state ->
+        _cameraError.value = state.error
+        _cameraOpen.value = state.type == CameraState.Type.OPEN
+        state.error?.let { Log.w(TAG, "camera state error ${it.code}", it.cause) }
+    }
 
     val isBound: Boolean get() = camera != null
 
@@ -154,10 +186,8 @@ class CameraSession(private val context: Context) {
         // cameraState is the public observable; addCameraStateListener is library-restricted.
         // Observing on the service's own lifecycle also means the observer goes away with the
         // service rather than outliving the binding.
-        boundCamera.cameraInfo.cameraState.observe(lifecycleOwner) { state ->
-            _cameraError.value = state.error
-            state.error?.let { Log.w(TAG, "camera state error ${it.code}", it.cause) }
-        }
+        observedState?.removeObserver(stateObserver)
+        observedState = boundCamera.cameraInfo.cameraState.also { it.observe(lifecycleOwner, stateObserver) }
 
         BoundSession(
             camera = boundCamera,
@@ -170,9 +200,25 @@ class CameraSession(private val context: Context) {
         unbind()
     }
 
-    /** Applies a new target rotation without rebinding. Safe mid-recording. */
-    fun updateRotation(surfaceRotation: Int) {
+    /**
+     * Points the viewfinder at the phone's new orientation. Main thread; safe mid-recording.
+     *
+     * Applied as soon as the orientation settles, so the live preview turns with the phone.
+     */
+    fun updatePreviewRotation(surfaceRotation: Int) {
         preview?.targetRotation = surfaceRotation
+    }
+
+    /**
+     * Sets the rotation the next recording will carry. Main thread; safe mid-recording.
+     *
+     * CameraX latches a recording's orientation hint when that recording starts, so this changes
+     * the *next* file, never the current one. The recorder calls it just before starting each
+     * segment rather than whenever the phone turns: the burned-in overlay follows the target
+     * rotation immediately, and applying it mid-segment would draw the timestamp sideways across
+     * the rest of a file whose orientation hint had not changed.
+     */
+    fun updateVideoRotation(surfaceRotation: Int) {
         videoCapture?.targetRotation = surfaceRotation
     }
 
@@ -210,6 +256,9 @@ class CameraSession(private val context: Context) {
 
     fun unbind() {
         runCatching { provider?.unbindAll() }
+        observedState?.removeObserver(stateObserver)
+        observedState = null
+        _cameraOpen.value = false
         _surfaceRequest.value?.willNotProvideSurface()
         _surfaceRequest.value = null
         camera = null

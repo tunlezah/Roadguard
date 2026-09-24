@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -25,7 +26,9 @@ import io.github.tunlezah.roadguard.recording.RecordingService
 import io.github.tunlezah.roadguard.settings.OrientationMode
 import io.github.tunlezah.roadguard.settings.Settings as RoadguardSettings
 import io.github.tunlezah.roadguard.ui.theme.RoadguardTheme
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -76,7 +79,10 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val settings by container.settings.collectAsState()
-            ApplyWindowPolicy(settings)
+            val batterySafe by remember {
+                container.recordingController.state.map { it.batterySafe }.distinctUntilChanged()
+            }.collectAsState(initial = false)
+            ApplyWindowPolicy(settings, batterySafe)
 
             RoadguardTheme(
                 themeSetting = settings.theme,
@@ -94,8 +100,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // A tap on the "resume recording" notification while the activity already exists.
+        setIntent(intent)
+    }
+
     override fun onResume() {
         super.onResume()
+        // Coming back to the app is when a permission granted in system settings takes effect:
+        // let a running recording service claim the foreground-service types it now may. Only
+        // while it runs -- starting it here would put a foreground notification up on every open.
+        if (container.recordingController.isAttached) {
+            RecordingService.send(this, RecordingService.ACTION_REFRESH_TYPES)
+        }
         container.mapRepository.refresh(container.settings.value.mapPackageId)
         container.weatherRepository.start()
         // The viewfinder is only worth producing frames for while the UI is on screen.
@@ -125,9 +143,14 @@ class MainActivity : ComponentActivity() {
         container.locationEngine.release(LocationEngine.Client.Ui)
     }
 
-    /** Applies the orientation and screen-on policy from settings. */
+    /**
+     * Applies the orientation and screen-on policy from settings.
+     *
+     * Battery-safe mode overrides "keep screen on": the display is the largest single draw on a
+     * phone, and recording carries on with the screen off.
+     */
     @Composable
-    private fun ApplyWindowPolicy(settings: RoadguardSettings) {
+    private fun ApplyWindowPolicy(settings: RoadguardSettings, batterySafe: Boolean) {
         LaunchedEffect(settings.orientationMode) {
             requestedOrientation = when (settings.orientationMode) {
                 // fullSensor rather than sensor: a cradle-mounted phone may sit at 180 degrees, and
@@ -138,8 +161,9 @@ class MainActivity : ComponentActivity() {
                 OrientationMode.LockLandscape -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
             }
         }
-        LaunchedEffect(settings.keepScreenOn) {
-            if (settings.keepScreenOn) {
+        val keepAwake = settings.keepScreenOn && !batterySafe
+        LaunchedEffect(keepAwake) {
+            if (keepAwake) {
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             } else {
                 window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -200,16 +224,21 @@ class MainActivity : ComponentActivity() {
      * request if a recording is already running or being torn down.
      */
     private fun maybeAutoStartRecording() {
-        if (autoStartConsidered || hasStartedRecordingThisLaunch) return
-        autoStartConsidered = true
+        // A tap on the "resume recording" notification is an explicit request to record, so it
+        // is honoured whatever the auto-start setting says, and every time it happens.
+        val resumeRequested = intent?.getBooleanExtra(EXTRA_RESUME_RECORDING, false) == true
+        if (resumeRequested) intent?.removeExtra(EXTRA_RESUME_RECORDING)
+        if (!resumeRequested && (autoStartConsidered || hasStartedRecordingThisLaunch)) return
+        if (!resumeRequested) autoStartConsidered = true
         // Read the *persisted* settings, not the hot snapshot: on a cold launch that snapshot
         // can still hold the compiled-in defaults (setupComplete = false) until DataStore's
         // first read lands, which would silently skip auto-start for exactly the user who
         // relies on it. first() waits for the real value.
         lifecycleScope.launch {
             val settings = container.settingsRepository.settings.first()
-            if (hasStartedRecordingThisLaunch) return@launch
-            if (!settings.setupComplete || !settings.autoStartRecording) return@launch
+            if (!resumeRequested && hasStartedRecordingThisLaunch) return@launch
+            if (!settings.setupComplete) return@launch
+            if (!resumeRequested && !settings.autoStartRecording) return@launch
             val cameraGranted = ContextCompat.checkSelfPermission(
                 this@MainActivity,
                 Manifest.permission.CAMERA,
@@ -232,7 +261,10 @@ class MainActivity : ComponentActivity() {
         }.onFailure { if (it !is ActivityNotFoundException) throw it }
     }
 
-    private companion object {
+    companion object {
+        /** Set on the intent of the "resume recording" notification. */
+        const val EXTRA_RESUME_RECORDING = "io.github.tunlezah.roadguard.extra.RESUME_RECORDING"
+
         /**
          * How often the UI wants a fix while it is on screen.
          *
@@ -240,7 +272,7 @@ class MainActivity : ComponentActivity() {
          * is not the interval that matters for power -- the recorder's own claim, which the thermal
          * engine throttles, applies whenever a recording is running.
          */
-        const val UI_LOCATION_INTERVAL_MS = 1_000L
+        private const val UI_LOCATION_INTERVAL_MS = 1_000L
     }
 
 }

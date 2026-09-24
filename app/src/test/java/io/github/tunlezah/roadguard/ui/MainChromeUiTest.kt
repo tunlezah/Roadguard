@@ -83,6 +83,23 @@ class MainChromeUiTest {
     }
 
     @Test
+    fun `starting offers stop, so the start-up countdown can be cancelled`() {
+        setControlBar(state(RecorderStatus.Starting))
+
+        compose.onNodeWithContentDescription("Stop recording").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Start recording").assertDoesNotExist()
+    }
+
+    @Test
+    fun `reconnecting still offers stop and protect, because the session is still running`() {
+        setControlBar(state(RecorderStatus.Recovering))
+
+        compose.onNodeWithContentDescription("Stop recording").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Start recording").assertDoesNotExist()
+        compose.onNodeWithText("Protect recording").assertIsEnabled()
+    }
+
+    @Test
     fun `protect is disabled when not recording`() {
         setControlBar(state(RecorderStatus.Idle))
 
@@ -327,6 +344,16 @@ class MainChromeUiTest {
         setStatusBar(MainUiState(recording = RecordingUiState(status = RecorderStatus.Idle)))
 
         compose.onNodeWithContentDescription(RecorderStatus.Idle.label).assertExists()
+    }
+
+    @Test
+    fun `the recording status chip says why recording is reconnecting`() {
+        val reason = "The camera stopped supplying frames. Roadguard will resume as soon as it is back."
+        setStatusBar(
+            MainUiState(recording = RecordingUiState(status = RecorderStatus.Recovering, lastErrorMessage = reason)),
+        )
+
+        compose.onNodeWithContentDescription(reason).assertExists()
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────────────

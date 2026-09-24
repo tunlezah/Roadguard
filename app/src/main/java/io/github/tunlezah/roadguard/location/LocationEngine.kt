@@ -15,6 +15,7 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import java.util.concurrent.Executor
 
 /**
@@ -35,6 +36,13 @@ import java.util.concurrent.Executor
  * Speed is passed through [SpeedFilter] before it is shown or burned into video, and fix quality
  * is derived from both accuracy and satellite count so the UI can distinguish "no GPS" from
  * "still acquiring".
+ *
+ * ### Threads
+ *
+ * Fixes and satellite status arrive on the location executor, the staleness tick on the
+ * recorder's thread, and requests from the activity and the recorder. So every change to [state]
+ * is an atomic read-modify-write -- a tick that read the state just before a new fix landed must
+ * not write the old fix back over it -- and the receiver bookkeeping is serialised under one lock.
  */
 class LocationEngine(
     private val context: Context,
@@ -46,24 +54,34 @@ class LocationEngine(
     private val _state = MutableStateFlow(LocationState())
     val state: StateFlow<LocationState> = _state.asStateFlow()
 
+    /** Guards [requesting], [currentIntervalMs] and the receiver registration calls. */
+    private val lock = Any()
     private var requesting = false
     private var currentIntervalMs = DEFAULT_INTERVAL_MS
+
+    @Volatile
     private var satellitesVisible = 0
+
+    @Volatile
     private var satellitesUsed = 0
 
     private val listener = LocationListener { location -> onLocation(location) }
 
     private val gnssCallback = object : GnssStatus.Callback() {
         override fun onSatelliteStatusChanged(status: GnssStatus) {
-            satellitesVisible = status.satelliteCount
-            satellitesUsed = (0 until status.satelliteCount).count { status.usedInFix(it) }
+            val visible = status.satelliteCount
+            val used = (0 until visible).count { status.usedInFix(it) }
+            satellitesVisible = visible
+            satellitesUsed = used
             // Republish so "acquiring" appears as soon as satellites are visible, long before a
             // first fix; without this the UI looks broken for the first 30 seconds of a cold start.
-            _state.value = _state.value.copy(
-                satellitesVisible = satellitesVisible,
-                satellitesUsed = satellitesUsed,
-                quality = qualityFor(_state.value, satellitesVisible),
-            )
+            _state.update { current ->
+                current.copy(
+                    satellitesVisible = visible,
+                    satellitesUsed = used,
+                    quality = qualityFor(current, visible),
+                )
+            }
         }
     }
 
@@ -104,19 +122,18 @@ class LocationEngine(
      *
      * Idempotent, and safe to call from either the main thread or the recorder's scope.
      */
-    fun request(client: Client, intervalMs: Long = DEFAULT_INTERVAL_MS) {
-        val effective = synchronized(requests) { requests.request(client, intervalMs) }
-        applyEffectiveInterval(effective)
+    fun request(client: Client, intervalMs: Long = DEFAULT_INTERVAL_MS) = synchronized(lock) {
+        applyEffectiveInterval(requests.request(client, intervalMs))
     }
 
     /** Releases [client]'s claim. Updates stop once nobody wants them. */
-    fun release(client: Client) {
-        val effective = synchronized(requests) { requests.release(client) }
+    fun release(client: Client) = synchronized(lock) {
+        val effective = requests.release(client)
         if (effective == null) stopUpdates() else applyEffectiveInterval(effective)
     }
 
     /** True when at least one client wants updates. Exposed for diagnostics. */
-    val isActive: Boolean get() = synchronized(requests) { requests.isActive }
+    val isActive: Boolean get() = synchronized(lock) { requests.isActive }
 
     private fun applyEffectiveInterval(intervalMs: Long) {
         if (requesting && intervalMs == currentIntervalMs) return
@@ -127,15 +144,15 @@ class LocationEngine(
     private fun startUpdates(intervalMs: Long = DEFAULT_INTERVAL_MS) {
         val manager = locationManager ?: return
         if (!hasPermission()) {
-            _state.value = _state.value.copy(permissionGranted = false, quality = FixQuality.NoSignal)
+            _state.update { it.copy(permissionGranted = false, quality = FixQuality.NoSignal) }
             return
         }
         currentIntervalMs = intervalMs
-        _state.value = _state.value.copy(permissionGranted = true)
+        _state.update { it.copy(permissionGranted = true) }
 
         val provider = bestProvider(manager)
         if (provider == null) {
-            _state.value = _state.value.copy(providerEnabled = false, quality = FixQuality.NoSignal)
+            _state.update { it.copy(providerEnabled = false, quality = FixQuality.NoSignal) }
             return
         }
 
@@ -152,7 +169,7 @@ class LocationEngine(
             )
             if (!requesting) manager.registerGnssStatusCallback(executor, gnssCallback)
             requesting = true
-            _state.value = _state.value.copy(providerEnabled = true)
+            _state.update { it.copy(providerEnabled = true) }
             // Seed with the last known fix so the map can centre immediately instead of waiting
             // for a first fix, clearly marked stale by its age.
             manager.getLastKnownLocation(provider)?.let { onLocation(it, fromCache = true) }
@@ -166,7 +183,7 @@ class LocationEngine(
         runCatching { manager.removeUpdates(listener) }
         runCatching { manager.unregisterGnssStatusCallback(gnssCallback) }
         requesting = false
-        speedFilter.reset()
+        synchronized(speedFilter) { speedFilter.reset() }
     }
 
     /**
@@ -176,36 +193,40 @@ class LocationEngine(
      * which is deliberate: throttling the recorder's own updates must not blank the map the user
      * is looking at.
      */
-    fun setRecorderInterval(intervalMs: Long) {
-        val wanted = synchronized(requests) { requests.retune(Client.Recorder, intervalMs) } ?: return
+    fun setRecorderInterval(intervalMs: Long) = synchronized(lock) {
+        val wanted = requests.retune(Client.Recorder, intervalMs) ?: return@synchronized
         applyEffectiveInterval(wanted)
     }
 
     /** Refreshes staleness and expires a held speed, without waiting for a new fix. */
     fun tick(nowElapsedMs: Long = SystemClock.elapsedRealtime()) {
-        val current = _state.value
-        val fixElapsed = current.fixEpochMs ?: return
-        val age = System.currentTimeMillis() - fixElapsed
-        speedFilter.expireIfStale(nowElapsedMs)
-        _state.value = current.copy(
-            ageMillis = age,
-            speedMetresPerSecond = speedFilter.current(nowElapsedMs),
-            quality = if (age > STALE_FIX_MS) FixQuality.Searching else current.quality,
-        )
+        if (_state.value.fixEpochMs == null) return
+        val speed = synchronized(speedFilter) { speedFilter.current(nowElapsedMs) }
+        _state.update { current ->
+            val fixEpochMs = current.fixEpochMs ?: return@update current
+            val age = System.currentTimeMillis() - fixEpochMs
+            current.copy(
+                ageMillis = age,
+                speedMetresPerSecond = speed,
+                quality = if (age > STALE_FIX_MS) FixQuality.Searching else current.quality,
+            )
+        }
     }
 
     private fun onLocation(location: Location, fromCache: Boolean = false) {
         val nowElapsed = SystemClock.elapsedRealtime()
-        val speed = speedFilter.accept(
-            rawSpeedMps = if (location.hasSpeed()) location.speed else null,
-            speedAccuracyMps = if (location.hasSpeedAccuracy()) {
-                location.speedAccuracyMetersPerSecond
-            } else {
-                null
-            },
-            horizontalAccuracyMetres = if (location.hasAccuracy()) location.accuracy else null,
-            atElapsedMs = nowElapsed,
-        )
+        val speed = synchronized(speedFilter) {
+            speedFilter.accept(
+                rawSpeedMps = if (location.hasSpeed()) location.speed else null,
+                speedAccuracyMps = if (location.hasSpeedAccuracy()) {
+                    location.speedAccuracyMetersPerSecond
+                } else {
+                    null
+                },
+                horizontalAccuracyMetres = if (location.hasAccuracy()) location.accuracy else null,
+                atElapsedMs = nowElapsed,
+            )
+        }
         val age = System.currentTimeMillis() - location.time
         val next = LocationState(
             quality = FixQuality.NoSignal,

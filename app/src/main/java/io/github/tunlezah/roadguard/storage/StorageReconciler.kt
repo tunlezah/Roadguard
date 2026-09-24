@@ -39,7 +39,12 @@ class StorageReconciler(
     private val trips: TripRepository,
 ) {
 
-    suspend fun reconcile(): ReconcileReport = withContext(Dispatchers.IO) {
+    /**
+     * @param sessionStartedAtEpochMs when this process started. Events detected at or after it
+     *   belong to this run, not to the one being repaired, and are left to the recorder. Files are
+     *   told apart exactly instead, by [StorageManager.isFromThisProcess].
+     */
+    suspend fun reconcile(sessionStartedAtEpochMs: Long = Long.MAX_VALUE): ReconcileReport = withContext(Dispatchers.IO) {
         // With the chosen volume unmounted, every row would compare against the fallback volume
         // and look deleted. Dropping thousands of index rows because a card was slow to mount
         // (or briefly ejected) is exactly the kind of loss this pass exists to prevent, so it
@@ -67,8 +72,10 @@ class StorageReconciler(
         var closedEvents = 0
         val notes = mutableListOf<String>()
 
-        // 1. Rows the last run never finished.
+        // 1. Rows the last run never finished. A row this run created is simply a segment that is
+        // still being recorded: its MP4 has no index yet, so it would look truncated.
         for (entity in segments.incomplete()) {
+            if (storage.isFromThisProcess(entity.fileName)) continue
             val file = storage.segmentFile(entity)
             when (val verdict = Mp4Inspector.inspect(file)) {
                 is Mp4Verdict.Playable -> {
@@ -100,8 +107,10 @@ class StorageReconciler(
             }
         }
 
-        // 2. Rows whose files are gone.
+        // 2. Rows whose files are gone. This run's newest row is indexed a moment before the
+        // recorder creates its file, so it is skipped rather than mistaken for a deleted clip.
         for (entity in segments.recent(limit = MAX_ROWS_CHECKED)) {
+            if (storage.isFromThisProcess(entity.fileName)) continue
             if (!storage.segmentFile(entity).exists()) {
                 segments.deleteById(entity.id)
                 droppedRows++
@@ -114,6 +123,7 @@ class StorageReconciler(
             ?: emptyArray()
         for (file in onDisk) {
             if (file.name in known) continue
+            if (storage.isFromThisProcess(file.name)) continue
             when (val verdict = Mp4Inspector.inspect(file)) {
                 is Mp4Verdict.Playable -> {
                     val adopted = adopt(file, verdict)
@@ -137,8 +147,9 @@ class StorageReconciler(
             }
         }
 
-        // 5. Events killed mid-protection.
+        // 5. Events killed mid-protection. An event from this run is still collecting its post-roll.
         for (event in events.byState(EventState.AwaitingPostRoll.name)) {
+            if (event.detectedAtEpochMs >= sessionStartedAtEpochMs) continue
             val overlapping = segments.overlapping(
                 fromEpochMs = event.detectedAtEpochMs - event.preEventSeconds * 1_000L,
                 toEpochMs = event.detectedAtEpochMs + event.postEventSeconds * 1_000L,
