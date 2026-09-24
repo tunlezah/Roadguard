@@ -13,6 +13,8 @@ import io.github.tunlezah.roadguard.map.MapRepository
 import io.github.tunlezah.roadguard.power.PowerMonitor
 import io.github.tunlezah.roadguard.recording.RecordingController
 import io.github.tunlezah.roadguard.storage.StorageManager
+import io.github.tunlezah.roadguard.storage.Mp4Inspector
+import io.github.tunlezah.roadguard.storage.ReconcileReport
 import io.github.tunlezah.roadguard.storage.StorageState
 import io.github.tunlezah.roadguard.thermal.ThermalSignalSource
 import io.github.tunlezah.roadguard.thermal.ThermalSource
@@ -45,6 +47,8 @@ class DiagnosticsCollector(
     private val weatherRepository: WeatherRepository,
     private val segments: SegmentDao,
     private val events: EventDao,
+    private val reconcileReport: () -> ReconcileReport?,
+    private val reconcileAtEpochMs: () -> Long?,
 ) {
 
     suspend fun collect(): DiagnosticsSnapshot = withContext(Dispatchers.IO) {
@@ -58,6 +62,7 @@ class DiagnosticsCollector(
                 recordingSection(),
                 thermalSection(),
                 storageSection(),
+                reconciliationSection(),
                 locationSection(),
                 sensorSection(),
                 mapSection(),
@@ -355,17 +360,102 @@ class DiagnosticsCollector(
                         ),
                     )
                 }
+                add(DiagnosticsEntry("Recordings folder", storageManager.layout.recordings.absolutePath))
+                val onDisk = storageManager.layout.recordings
+                    .listFiles { file -> file.isFile && file.name.endsWith(".mp4", ignoreCase = true) }
+                    ?.toList().orEmpty()
+                add(
+                    DiagnosticsEntry(
+                        "Recordings on disk",
+                        "${onDisk.size} file(s), ${mib(onDisk.sumOf { it.length() })}",
+                        Provenance.Measured,
+                    ),
+                )
                 add(DiagnosticsEntry("Segments indexed", "${segments.count()}", Provenance.Measured))
                 add(DiagnosticsEntry("Events recorded", "${events.count()}", Provenance.Measured))
-                val quarantined = storageManager.layout.quarantine.listFiles()?.size ?: 0
+                val quarantineFiles = storageManager.layout.quarantine
+                    .listFiles { file -> file.isFile }
+                    ?.sortedByDescending { it.lastModified() }.orEmpty()
                 add(
                     DiagnosticsEntry(
                         "Quarantined files",
-                        "$quarantined",
+                        "${quarantineFiles.size}",
                         Provenance.Measured,
-                        if (quarantined > 0) EntrySeverity.Warning else EntrySeverity.Normal,
+                        if (quarantineFiles.isNotEmpty()) EntrySeverity.Warning else EntrySeverity.Normal,
                     ),
                 )
+                // Each quarantined clip is described by its live verdict, size and time -- not its
+                // name -- so the report stays free of file names while still saying, per clip,
+                // *why* it could not be played. "truncated: N bytes of video with no index" is the
+                // signature of a recording that was writing fine and was then killed mid-clip.
+                quarantineFiles.take(QUARANTINE_LISTING_LIMIT).forEachIndexed { index, file ->
+                    add(
+                        DiagnosticsEntry(
+                            "  Clip ${index + 1}",
+                            "${Mp4Inspector.inspect(file).summary}, ${mib(file.length())}, ${READABLE_STAMP.format(Date(file.lastModified()))}",
+                            Provenance.Measured,
+                            EntrySeverity.Warning,
+                        ),
+                    )
+                }
+                if (quarantineFiles.size > QUARANTINE_LISTING_LIMIT) {
+                    add(DiagnosticsEntry("  and more", "${quarantineFiles.size - QUARANTINE_LISTING_LIMIT} further clip(s)", Provenance.Measured))
+                }
+            },
+        )
+    }
+
+    /**
+     * What the last start-up reconciliation did.
+     *
+     * The first thing to read when footage seems to be missing: it says whether the last start
+     * recovered clips, re-indexed files found on disk, or -- the case that matters most --
+     * quarantined or dropped anything. An empty recordings folder with nothing quarantined and
+     * nothing dropped means nothing was ever written; a pile of quarantined clips means they
+     * were written and could not be validated. Those are very different faults.
+     */
+    private fun reconciliationSection(): DiagnosticsSection {
+        val report = reconcileReport()
+        val at = reconcileAtEpochMs()
+        return DiagnosticsSection(
+            "Startup reconciliation",
+            buildList {
+                if (report == null) {
+                    add(DiagnosticsEntry("Last run", "not run yet this session", Provenance.Unavailable))
+                    return@buildList
+                }
+                add(
+                    DiagnosticsEntry(
+                        "Last run",
+                        at?.let { READABLE_STAMP.format(Date(it)) } ?: "unknown",
+                        Provenance.Measured,
+                    ),
+                )
+                add(DiagnosticsEntry("Summary", report.summary(), Provenance.Measured))
+                add(DiagnosticsEntry("Clips recovered", "${report.repairedIncomplete}", Provenance.Measured))
+                add(DiagnosticsEntry("Files re-indexed from disk", "${report.adoptedFiles}", Provenance.Measured))
+                add(DiagnosticsEntry("Re-protected from sidecar", "${report.reprotected}", Provenance.Measured))
+                add(
+                    DiagnosticsEntry(
+                        "Quarantined this start",
+                        "${report.quarantined}",
+                        Provenance.Measured,
+                        if (report.quarantined > 0) EntrySeverity.Warning else EntrySeverity.Normal,
+                    ),
+                )
+                add(
+                    DiagnosticsEntry(
+                        "Index rows dropped",
+                        "${report.droppedRows}",
+                        Provenance.Measured,
+                        if (report.droppedRows > 0) EntrySeverity.Warning else EntrySeverity.Normal,
+                    ),
+                )
+                add(DiagnosticsEntry("Interrupted events closed", "${report.closedEvents}", Provenance.Measured))
+                add(DiagnosticsEntry("Clips grouped into trips", "${report.tripsAssembled}", Provenance.Measured))
+                add(DiagnosticsEntry("Interrupted trips closed", "${report.tripsClosed}", Provenance.Measured))
+                add(DiagnosticsEntry("Empty trips removed", "${report.tripsPruned}", Provenance.Measured))
+                add(DiagnosticsEntry("Orphan tracks deleted", "${report.tracksDeleted}", Provenance.Measured))
             },
         )
     }
@@ -513,5 +603,7 @@ class DiagnosticsCollector(
 
     private companion object {
         val FILE_STAMP = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
+        val READABLE_STAMP = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+        const val QUARANTINE_LISTING_LIMIT = 20
     }
 }

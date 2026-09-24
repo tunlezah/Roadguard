@@ -86,6 +86,31 @@ If the in-app Recordings list itself is empty or missing a drive:
 | The encoder failed repeatedly | a device whose hardware encoder rejects the stream | each failed clip is quarantined and the reason is in the recent events list |
 | A microSD card was chosen and is not mounted | the card was ejected or slow to mount | Roadguard stands down rather than dropping the index or scattering footage onto internal storage; re-seat the card |
 
+Why a *long* drive can also lose everything: once the app is killed, recording does **not**
+resume on its own. A camera service can only be started from a visible screen (the same reason
+there is no boot auto-start), so after a kill Roadguard sits idle until you reopen it, even
+though a foreground-service notification may still be showing. If the kill lands in the first
+few minutes, before the first segment finalises, a 30-minute drive can end with a single
+quarantined clip and nothing in the list. Reopen the app (or leave it in the foreground) and
+confirm the notification says *recording*, not *not recording*, partway through the drive.
+
+**To tell which of these is happening, open Settings → Diagnostics** and read three things:
+
+* **Recordings folder** and **Recordings on disk** — the exact path clips are written to, and how
+  many `.mp4` files and how many bytes are actually there. If this is non-zero but the in-app
+  list is short, the files exist and the index lost them; if it is zero, nothing was written to
+  that folder.
+* **Segments indexed** — the database's count. A gap between this and *Recordings on disk* points
+  at the index, not the recorder.
+* **Startup reconciliation** — what the last start repaired, dropped or quarantined, and the
+  per-clip verdict for each quarantined file. A verdict of *truncated: N bytes of video with no
+  index* means that clip was being written normally and the app was killed mid-clip. An empty
+  recordings folder with nothing quarantined and nothing dropped means recording never wrote
+  anything — a different fault entirely (it never started, or wrote to another volume).
+
+Export that report (the **Export** button) after a drive that lost footage; it is the fastest
+way to say which fault you are looking at.
+
 **The single most effective fix** for the first row — by far the most common — is to stop the
 platform killing the app: Settings → Apps → Roadguard → Battery → **Unrestricted**, and remove
 Roadguard from every vendor "deep sleep"/"app sleep" list. See *Recording stops when the screen
