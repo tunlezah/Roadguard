@@ -135,7 +135,8 @@ ten defined divergences:
 | Situation | Cause | Repair |
 | --- | --- | --- |
 | Row marked incomplete | killed mid-recording | inspect the file; index it if playable, quarantine it if not |
-| Newest finished clip with no index | power lost before the file reached the disk | quarantine it |
+| Newest finished clip with no index, or an index cut short | power lost before the file reached the disk | quarantine it |
+| File whose index and media are whole but whose metadata cannot be read | the platform's metadata reader failing for a moment | leave it exactly where it is; check it again next start |
 | Row with no file | user deleted it, or the card was swapped | drop the row — only while other recordings are present |
 | File with no row | crash between muxer finalise and index insert | inspect and adopt it |
 | File with a protection sidecar but an unprotected row | crash between marking and indexing | re-apply protection |
@@ -157,6 +158,19 @@ used to drop every row on it — and with the rows the trips, the tracks and the
 for footage that was on the disk the whole time. A folder that cannot be listed now stops the
 pass; a folder holding no earlier recording keeps every row whose file is missing, shown as
 missing in the list and counted in the report, until a start-up that can tell the difference.
+
+**A file's structure decides its fate, not a metadata read.** `Mp4Inspector` walks the top-level
+boxes itself and asks the platform's `MediaMetadataRetriever` only for the duration and
+dimensions of a file that is already whole. A whole file whose metadata that reader cannot return
+is reported as `IndexedButUnread`, which no caller treats as a reason to move or drop anything:
+the reconciler leaves it in place for the next start, the recorder keeps it, and the player
+tries it. An index box whose declared size runs past the end of the file — the power going
+during the last write — is not an index at all, and the file is quarantined as truncated.
+
+**Each step of the pass runs on its own.** A database or file error in one step is noted in the
+report and the remaining steps still run, so nothing can stand between a file the index has lost
+and its re-indexing. A pass that fails outright is shown as such in Diagnostics rather than as
+"not run yet".
 
 **A finished clip is on the medium before its row says so.** The muxer closes a clip without
 syncing it, so its last seconds — and the index at its very end — can sit in the kernel's write

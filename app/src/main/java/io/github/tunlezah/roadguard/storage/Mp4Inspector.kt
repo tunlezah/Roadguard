@@ -38,7 +38,7 @@ object Mp4Inspector {
 
         val types = boxes.map { it.type }
         val hasFileType = "ftyp" in types
-        val hasIndex = "moov" in types
+        val hasIndex = hasWholeIndex(boxes)
         val hasMedia = "mdat" in types
 
         return when {
@@ -48,9 +48,11 @@ object Mp4Inspector {
                 if (metadata != null && metadata.durationMs > 0) {
                     Mp4Verdict.Playable(metadata)
                 } else {
-                    // Index and media present but nothing readable: treat as truncated rather
-                    // than claiming a duration we could not obtain.
-                    Mp4Verdict.TruncatedNoIndex(length, bytesOfMedia(boxes))
+                    // The structure is whole: index and media are both there. Only the metadata
+                    // read failed, and that read is a platform service that can fail for reasons
+                    // of its own. Saying so, rather than "truncated", is what stops a good file
+                    // being moved to quarantine on the strength of a passing failure.
+                    Mp4Verdict.IndexedButUnread(length)
                 }
             }
 
@@ -60,10 +62,18 @@ object Mp4Inspector {
     }
 
     /**
+     * True when an index box is present *and fits inside the file*. The muxer writes the index
+     * last, so a file cut short by a power loss can end part-way through it; a box whose declared
+     * size runs past the end of the file is exactly that, and does not count.
+     */
+    fun hasWholeIndex(boxes: List<Mp4Box>): Boolean = boxes.any { it.type == "moov" && it.isWhole }
+
+    /**
      * Reads the top-level box chain.
      *
      * Stops at [MAX_BOXES] so a corrupt length field cannot spin forever, and treats a
-     * zero-size box as "extends to end of file" per ISO/IEC 14496-12.
+     * zero-size box as "extends to end of file" per ISO/IEC 14496-12. A box that claims more
+     * bytes than the file holds is recorded with [Mp4Box.isWhole] false and ends the scan.
      */
     fun topLevelBoxes(file: File): List<Mp4Box> {
         val boxes = mutableListOf<Mp4Box>()
@@ -82,7 +92,9 @@ object Mp4Inspector {
                     else -> size32 to 8L
                 }
                 if (size < headerSize) break
-                boxes += Mp4Box(type = type, offset = offset, size = size)
+                val whole = offset + size <= length
+                boxes += Mp4Box(type = type, offset = offset, size = size, isWhole = whole)
+                if (!whole) break
                 offset += size
             }
         }
@@ -126,7 +138,7 @@ object Mp4Inspector {
     private const val MAX_BOXES = 512
 }
 
-data class Mp4Box(val type: String, val offset: Long, val size: Long)
+data class Mp4Box(val type: String, val offset: Long, val size: Long, val isWhole: Boolean = true)
 
 data class Mp4Metadata(
     val durationMs: Long,
@@ -150,17 +162,26 @@ sealed interface Mp4Verdict {
      */
     data class TruncatedNoIndex(val fileBytes: Long, val mediaBytes: Long) : Mp4Verdict
 
+    /**
+     * Index and media are both present and whole, but the platform's metadata reader could not
+     * describe the file this time. The file is left exactly where it is: a player may well open
+     * it, and the next check may succeed. Never a reason to move or drop anything.
+     */
+    data class IndexedButUnread(val fileBytes: Long) : Mp4Verdict
+
     data class Empty(val fileBytes: Long) : Mp4Verdict
     data object NotMp4 : Mp4Verdict
     data object Missing : Mp4Verdict
     data class Unreadable(val reason: String) : Mp4Verdict
 
-    val isUsable: Boolean get() = this is Playable
+    /** Structurally whole: worth keeping, indexing and handing to a player. */
+    val isUsable: Boolean get() = this is Playable || this is IndexedButUnread
 
     val summary: String
         get() = when (this) {
             is Playable -> "playable, ${metadata.durationMs} ms"
             is TruncatedNoIndex -> "truncated: $mediaBytes bytes of video with no index"
+            is IndexedButUnread -> "index present but the metadata could not be read this time"
             is Empty -> "empty ($fileBytes bytes)"
             NotMp4 -> "not an MP4"
             Missing -> "file missing"

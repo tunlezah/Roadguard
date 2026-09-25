@@ -89,38 +89,53 @@ class StorageReconciler(
         var closedEvents = 0
         val notes = mutableListOf<String>()
 
+        // Each step runs on its own: a failure in one -- a database error, a file that cannot
+        // be read -- is noted, and the steps after it still run. Files the index has lost are
+        // re-indexed in step 3, and nothing before it may stand in the way of that.
+        suspend fun step(name: String, block: suspend () -> Unit) {
+            runCatching { block() }.onFailure { failure ->
+                Log.e(TAG, "reconcile step '$name' failed", failure)
+                notes += "the '$name' step failed and was skipped: ${failure.message ?: failure.javaClass.simpleName}"
+            }
+        }
+
         // 1. Rows the last run never finished. A row this run created is simply a segment that is
         // still being recorded: its MP4 has no index yet, so it would look truncated.
-        for (entity in segments.incomplete()) {
-            if (storage.isFromThisProcess(entity.fileName)) continue
-            val file = storage.segmentFile(entity)
-            when (val verdict = Mp4Inspector.inspect(file)) {
-                is Mp4Verdict.Playable -> {
-                    segments.update(
-                        entity.copy(
-                            isComplete = true,
-                            durationMs = verdict.metadata.durationMs,
-                            sizeBytes = file.length(),
-                            widthPx = verdict.metadata.width.takeIf { it > 0 } ?: entity.widthPx,
-                            heightPx = verdict.metadata.height.takeIf { it > 0 } ?: entity.heightPx,
-                            rotationDegrees = verdict.metadata.rotationDegrees,
-                        ),
-                    )
-                    repairedIncomplete++
-                }
+        step("interrupted clips") {
+            for (entity in segments.incomplete()) {
+                if (storage.isFromThisProcess(entity.fileName)) continue
+                val file = storage.segmentFile(entity)
+                when (val verdict = Mp4Inspector.inspect(file)) {
+                    is Mp4Verdict.Playable -> {
+                        segments.update(
+                            entity.copy(
+                                isComplete = true,
+                                durationMs = verdict.metadata.durationMs,
+                                sizeBytes = file.length(),
+                                widthPx = verdict.metadata.width.takeIf { it > 0 } ?: entity.widthPx,
+                                heightPx = verdict.metadata.height.takeIf { it > 0 } ?: entity.heightPx,
+                                rotationDegrees = verdict.metadata.rotationDegrees,
+                            ),
+                        )
+                        repairedIncomplete++
+                    }
 
-                // Kept rows are counted once, in step 2, which sees every row.
-                Mp4Verdict.Missing -> if (mayDropMissing) {
-                    segments.deleteById(entity.id)
-                    droppedRows++
-                }
+                    // Kept rows are counted once, in step 2, which sees every row.
+                    Mp4Verdict.Missing -> if (mayDropMissing) {
+                        segments.deleteById(entity.id)
+                        droppedRows++
+                    }
 
-                else -> {
-                    val moved = storage.quarantine(file)
-                    segments.deleteById(entity.id)
-                    quarantined++
-                    notes += "${entity.fileName}: ${verdict.summary}" +
-                        if (moved != null) " (moved to quarantine)" else " (could not be moved)"
+                    // Whole, but not describable right now. Left as it is, to be checked again.
+                    is Mp4Verdict.IndexedButUnread -> notes += "${entity.fileName}: ${verdict.summary}; left for the next start"
+
+                    else -> {
+                        val moved = storage.quarantine(file)
+                        segments.deleteById(entity.id)
+                        quarantined++
+                        notes += "${entity.fileName}: ${verdict.summary}" +
+                            if (moved != null) " (moved to quarantine)" else " (could not be moved)"
+                    }
                 }
             }
         }
@@ -132,85 +147,98 @@ class StorageReconciler(
         // before it did, and a failure that lands inside that sync. Only the structure is read: an
         // index box present means the file is whole, and a passing metadata hiccup cannot send a
         // good clip to quarantine.
-        for (entity in segments.recent(limit = RECHECK_NEWEST)) {
-            if (!entity.isComplete || storage.isFromThisProcess(entity.fileName)) continue
-            val file = storage.segmentFile(entity)
-            if (!file.exists()) continue
-            val boxes = runCatching { Mp4Inspector.topLevelBoxes(file) }.getOrNull() ?: continue
-            if (boxes.any { it.type == "moov" }) continue
-            val moved = storage.quarantine(file)
-            segments.deleteById(entity.id)
-            quarantined++
-            notes += "${entity.fileName}: finished clip with no index, probably lost with the power" +
-                if (moved != null) " (moved to quarantine)" else " (could not be moved)"
+        step("newest finished clips") {
+            for (entity in segments.recent(limit = RECHECK_NEWEST)) {
+                if (!entity.isComplete || storage.isFromThisProcess(entity.fileName)) continue
+                val file = storage.segmentFile(entity)
+                if (!file.exists()) continue
+                val boxes = runCatching { Mp4Inspector.topLevelBoxes(file) }.getOrNull() ?: continue
+                if (Mp4Inspector.hasWholeIndex(boxes)) continue
+                val moved = storage.quarantine(file)
+                segments.deleteById(entity.id)
+                quarantined++
+                notes += "${entity.fileName}: finished clip with no index, probably lost with the power" +
+                    if (moved != null) " (moved to quarantine)" else " (could not be moved)"
+            }
         }
 
         // 2. Rows whose files are gone. This run's newest row is indexed a moment before the
         // recorder creates its file, so it is skipped rather than mistaken for a deleted clip.
-        for (entity in segments.recent(limit = MAX_ROWS_CHECKED)) {
-            if (storage.isFromThisProcess(entity.fileName)) continue
-            if (storage.segmentFile(entity).exists()) continue
-            if (mayDropMissing) {
-                segments.deleteById(entity.id)
-                droppedRows++
-            } else {
-                keptMissing++
+        step("missing files") {
+            for (entity in segments.recent(limit = MAX_ROWS_CHECKED)) {
+                if (storage.isFromThisProcess(entity.fileName)) continue
+                if (storage.segmentFile(entity).exists()) continue
+                if (mayDropMissing) {
+                    segments.deleteById(entity.id)
+                    droppedRows++
+                } else {
+                    keptMissing++
+                }
             }
-        }
-        if (keptMissing > 0) {
-            notes += "$keptMissing indexed clip(s) were not found, and no earlier recording is on this volume; " +
-                "kept in case the storage was not ready"
-            Log.w(TAG, "$keptMissing indexed file(s) missing with an empty recordings folder; keeping their rows")
+            if (keptMissing > 0) {
+                notes += "$keptMissing indexed clip(s) were not found, and no earlier recording is on this volume; " +
+                    "kept in case the storage was not ready"
+                Log.w(TAG, "$keptMissing indexed file(s) missing with an empty recordings folder; keeping their rows")
+            }
         }
 
         // 3. Files the index does not know about. The listing predates the steps above, which
         // may have moved some of what it names to quarantine.
-        val known = segments.allFileNames().toHashSet()
-        for (file in onDisk) {
-            if (file.name in known) continue
-            if (storage.isFromThisProcess(file.name)) continue
-            if (!file.exists()) continue
-            when (val verdict = Mp4Inspector.inspect(file)) {
-                is Mp4Verdict.Playable -> {
-                    val adopted = adopt(file, verdict)
-                    if (adopted != null) adoptedFiles++
-                }
+        step("files without an index entry") {
+            val known = segments.allFileNames().toHashSet()
+            for (file in onDisk) {
+                if (file.name in known) continue
+                if (storage.isFromThisProcess(file.name)) continue
+                if (!file.exists()) continue
+                when (val verdict = Mp4Inspector.inspect(file)) {
+                    is Mp4Verdict.Playable -> {
+                        val adopted = adopt(file, verdict)
+                        if (adopted != null) adoptedFiles++
+                    }
 
-                else -> {
-                    val moved = storage.quarantine(file)
-                    quarantined++
-                    notes += "${file.name}: unindexed and ${verdict.summary}" +
-                        if (moved != null) " (moved to quarantine)" else ""
+                    // Whole but not describable right now: left in place, to be adopted next time.
+                    is Mp4Verdict.IndexedButUnread -> notes += "${file.name}: unindexed, ${verdict.summary}; left for the next start"
+
+                    else -> {
+                        val moved = storage.quarantine(file)
+                        quarantined++
+                        notes += "${file.name}: unindexed and ${verdict.summary}" +
+                            if (moved != null) " (moved to quarantine)" else ""
+                    }
                 }
             }
         }
 
         // 4. Protection sidecars that outlived their index row's protected flag.
-        for (entity in segments.recent(limit = MAX_ROWS_CHECKED)) {
-            if (!entity.isProtected && storage.hasProtectionSidecar(entity.fileName)) {
-                segments.protect(listOf(entity.id), reason = "recovered from protection marker", eventId = entity.eventId)
-                reprotected++
+        step("protection markers") {
+            for (entity in segments.recent(limit = MAX_ROWS_CHECKED)) {
+                if (!entity.isProtected && storage.hasProtectionSidecar(entity.fileName)) {
+                    segments.protect(listOf(entity.id), reason = "recovered from protection marker", eventId = entity.eventId)
+                    reprotected++
+                }
             }
         }
 
         // 5. Events killed mid-protection. An event from this run is still collecting its post-roll.
-        for (event in events.byState(EventState.AwaitingPostRoll.name)) {
-            if (event.detectedAtEpochMs >= sessionStartedAtEpochMs) continue
-            val overlapping = segments.overlapping(
-                fromEpochMs = event.detectedAtEpochMs - event.preEventSeconds * 1_000L,
-                toEpochMs = event.detectedAtEpochMs + event.postEventSeconds * 1_000L,
-            )
-            if (overlapping.isNotEmpty()) {
-                segments.protect(overlapping.map { it.id }, reason = "event ${event.id}", eventId = event.id)
-                overlapping.forEach {
-                    storage.writeProtectionSidecar(it.fileName, "event ${event.id}", event.id, event.detectedAtEpochMs)
+        step("interrupted events") {
+            for (event in events.byState(EventState.AwaitingPostRoll.name)) {
+                if (event.detectedAtEpochMs >= sessionStartedAtEpochMs) continue
+                val overlapping = segments.overlapping(
+                    fromEpochMs = event.detectedAtEpochMs - event.preEventSeconds * 1_000L,
+                    toEpochMs = event.detectedAtEpochMs + event.postEventSeconds * 1_000L,
+                )
+                if (overlapping.isNotEmpty()) {
+                    segments.protect(overlapping.map { it.id }, reason = "event ${event.id}", eventId = event.id)
+                    overlapping.forEach {
+                        storage.writeProtectionSidecar(it.fileName, "event ${event.id}", event.id, event.detectedAtEpochMs)
+                    }
                 }
+                // The post-roll can no longer be recorded, so the event is closed as incomplete
+                // rather than left waiting for footage that will never arrive.
+                events.update(event.copy(state = EventState.Incomplete.name))
+                closedEvents++
+                notes += "event ${event.id} was interrupted; protected ${overlapping.size} segment(s) that survived"
             }
-            // The post-roll can no longer be recorded, so the event is closed as incomplete
-            // rather than left waiting for footage that will never arrive.
-            events.update(event.copy(state = EventState.Incomplete.name))
-            closedEvents++
-            notes += "event ${event.id} was interrupted; protected ${overlapping.size} segment(s) that survived"
         }
 
         // 6-9. Trips: group what has none, close what was interrupted, drop what is empty, and

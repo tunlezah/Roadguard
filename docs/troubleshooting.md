@@ -68,37 +68,52 @@ finished before that is on the disk and in the list. If the phone died before it
 some phones shut down with little warning, or the app had already been killed -- only the clip in
 progress is lost: it has no index yet, and the next start-up moves it to quarantine and says so.
 
-Two things used to turn that one lost clip into "everything is gone", and both are fixed:
+Nothing in the recorder deletes earlier clips because the battery ran down. What *can* make an
+entire day look gone is the loop (below), or the start-up check that runs when the app is next
+opened. Three weaknesses in that check are fixed; the first is rare on internal storage, the
+other two are not tied to any storage type:
 
-* **The start-up check dropped the whole index.** After a reboot the recordings folder can be
-  empty or unreadable for a moment (a memory card still mounting, shared storage not yet served
-  after the phone is unlocked). The check compared the index with that empty folder, concluded
-  every clip had been deleted, and removed every entry — trips, tracks and protection marks
-  included — while the files sat on the disk untouched. It now refuses to judge an unreadable
-  folder, and a folder holding no earlier recording keeps every entry, shown as *missing*, until
-  a start-up that can tell the difference. Diagnostics → Startup reconciliation → *Index rows
-  dropped* is where that loss showed; *Missing files kept in the index* is the new line.
+* **The whole index could be dropped against an empty folder.** The check compares the index
+  with the recordings folder. If that folder is empty or unreadable at the moment the app starts
+  — a memory card still mounting; on internal storage only if the app is opened within moments of
+  unlocking, since nothing starts Roadguard at boot — every entry was removed, trips, tracks and
+  protection marks with them, while the files stayed on the disk. It now refuses to judge an
+  unreadable folder, and a folder holding no earlier recording keeps every entry, shown as
+  *missing*, until a start-up that can tell the difference.
+* **A whole file that could not be described was quarantined.** Deciding whether a clip is
+  playable used to lean on the platform's metadata reader. A file with its index and its video
+  intact whose metadata that reader could not return *this time* was classed as truncated and
+  moved to quarantine — for an interrupted clip, and for any clip the index had lost. The
+  structure of the file now decides: a whole file is left where it is and tried again next time,
+  and only a file with no index, or an index cut short, is quarantined.
 * **The last finished clip could be unplayable.** A finished clip is closed without being forced
   to the disk, so a phone that lost power within half a minute of a clip finishing could keep an
   entry saying "complete" for a file whose end never made it. Each clip is now flushed to the
-  storage before its entry is marked complete, and the newest finished clips are checked for an
-  index at every start-up.
+  storage before its entry is marked complete, and the newest finished clips are checked for a
+  whole index at every start-up.
 
-**If this has already happened to you**, the footage may well still be there:
+A failure part-way through the check used to stop it silently, leaving Diagnostics saying it had
+not run. Each step now runs on its own, so a fault in one cannot prevent the re-indexing of files
+in another, and a failed pass says so in Diagnostics.
 
-1. Force-close Roadguard and open it again. Files on disk that lost their index entry are
-   re-indexed at start-up, as "recovered" clips grouped into trips.
-2. Settings → Diagnostics → *Recordings on disk* says how many clip files are actually in the
-   folder; *Startup reconciliation* says what the last start recovered, re-indexed, quarantined or
-   dropped; *Quarantined files* lists clips that could not be played and why.
-3. A quarantined clip is in `Android/data/io.github.tunlezah.roadguard/files/quarantine/` over
-   USB, and can usually be repaired on a computer with `untrunc` or `ffmpeg`.
+**To find out what happened to your footage**, force-close Roadguard, open it again, and read
+three lines in Settings → Diagnostics:
 
-Also check the loop size. Recording is a loop, not an archive: with the default 5 GB budget the
-loop holds well under an hour of 1080p footage, so most of a full day is deleted, oldest first,
-long before the battery runs down. Diagnostics → Storage → *Loop coverage* shows how much history
-the loop keeps at the measured bitrate. Raise the budget (Settings → Storage) or protect the trips
-you want to keep; protected footage is never deleted by the loop.
+| Reading | Meaning |
+| --- | --- |
+| *Recordings on disk* is 0 and *Quarantined files* is 0 | nothing from that day is on the phone any more. The loop deleted it (see below), or it was never written to this folder |
+| *Recordings on disk* is larger than *Segments indexed* | clips are on the disk that the list does not know about. The start-up check re-indexes them; *Startup reconciliation → Files re-indexed from disk* says how many it just did, and a note explains any it left for next time |
+| *Quarantined files* is more than 1 | clips were written and then judged unplayable. Each is listed with its verdict; "truncated: N bytes of video with no index" is a clip cut off mid-write |
+| *Startup reconciliation → Index rows dropped* is large | the index was emptied against an empty folder, the first fault above. The files are re-indexed on the next start if they are still there |
+
+A quarantined clip is in `Android/data/io.github.tunlezah.roadguard/files/quarantine/` over USB,
+and can usually be repaired on a computer with `untrunc` or `ffmpeg`.
+
+Also check the loop size. Recording is a loop, not an archive: the default budget is 5 GB, which
+at 1080p is typically around an hour of footage or less, so most of a full day is deleted, oldest
+first, long before the battery runs down. Diagnostics → Storage → *Loop coverage* shows how much
+history the loop keeps at the bitrate this phone actually produces. Raise the budget (Settings →
+Storage) or protect the trips you want to keep; protected footage is never deleted by the loop.
 
 ### Recording says “Reconnecting”
 
@@ -145,7 +160,8 @@ If the in-app Recordings list itself is empty or missing a drive:
 | What happened | Why | What you see |
 | --- | --- | --- |
 | The app was killed mid-clip | battery optimisation, a vendor "app sleep" list, swiping the app away on some launchers, or a power cut at ignition-off. An MP4 only becomes playable when its index is written **at the end** of the clip, so a clip cut off in the middle has no index | the interrupted clip is moved to `quarantine/` on the next start — the quarantine count in **Diagnostics → storage** rises — rather than shown as a normal recording. A drive shorter than one segment (default 3 min) that ends in a kill can leave *nothing* in the list |
-| The recordings folder was not ready when the app started | a memory card still mounting after a reboot, or shared storage not yet served after unlocking | the start-up check used to drop every index entry, hiding footage that was still on the disk. It now keeps the entries (shown as *missing*) and re-checks at the next start; force-closing and reopening the app re-indexes anything that was lost this way |
+| The recordings folder was not ready when the app started | a memory card still mounting after a reboot; on internal storage, only the app being opened within moments of unlocking | the start-up check used to drop every index entry, hiding footage that was still on the disk. It now keeps the entries (shown as *missing*) and re-checks at the next start; force-closing and reopening the app re-indexes anything that was lost this way |
+| A whole clip's metadata could not be read at start-up | the platform's metadata reader failing for a moment | the start-up check used to quarantine the clip as truncated. A whole file is now left in place and checked again next time |
 | The battery went flat | see *The battery went flat while recording* above | at most the clip in progress is lost, and it is quarantined rather than deleted |
 | The encoder failed repeatedly | a device whose hardware encoder rejects the stream | each failed clip is quarantined and the reason is in the recent events list |
 | A microSD card was chosen and is not mounted | the card was ejected or slow to mount | Roadguard stands down rather than dropping the index or scattering footage onto internal storage; re-seat the card |

@@ -195,6 +195,36 @@ class StorageReconcilerTest {
         assertThat(database.segments().count()).isEqualTo(1)
     }
 
+    @Test
+    fun `an interrupted clip that is whole but unreadable right now is left exactly as it is`() = runTest {
+        // Index and media present, metadata read failing: nothing is moved and nothing dropped.
+        insert(row("RG_1.mp4", complete = false, startedAt = 1_000L))
+        val file = File(storage.layout.recordings, "RG_1.mp4").apply { writeBytes(mp4(withIndex = true)) }
+
+        val report = reconciler.reconcile()
+
+        assertWithMessage(report.toString()).that(report.quarantined).isEqualTo(0)
+        assertWithMessage(report.toString()).that(report.repairedIncomplete).isEqualTo(0)
+        assertThat(file.exists()).isTrue()
+        assertThat(database.segments().byFileName("RG_1.mp4")).isNotNull()
+        assertThat(report.notes.single()).contains("left for the next start")
+    }
+
+    @Test
+    fun `a finished clip whose index was cut short is quarantined`() = runTest {
+        // The power went during the last write: the index box is there, but not all of it.
+        insert(row("RG_1.mp4", complete = true, startedAt = 1_000L))
+        insert(row("RG_2.mp4", complete = true, startedAt = 2_000L))
+        writePlayable("RG_1.mp4")
+        val whole = mp4(withIndex = true)
+        File(storage.layout.recordings, "RG_2.mp4").writeBytes(whole.copyOf(whole.size - 4))
+
+        val report = reconciler.reconcile()
+
+        assertWithMessage(report.toString()).that(report.quarantined).isEqualTo(1)
+        assertThat(database.segments().allFileNames()).containsExactly("RG_1.mp4")
+    }
+
     // ── Files the index lost ────────────────────────────────────────────────────────────
 
     @Test
@@ -207,6 +237,18 @@ class StorageReconcilerTest {
         val adopted = database.segments().byFileName("RG_lost.mp4")!!
         assertThat(adopted.isComplete).isTrue()
         assertThat(adopted.profileLabel).isEqualTo("recovered")
+    }
+
+    @Test
+    fun `an unindexed file that is whole but unreadable right now is left in place`() = runTest {
+        val file = File(storage.layout.recordings, "RG_lost.mp4").apply { writeBytes(mp4(withIndex = true)) }
+
+        val report = reconciler.reconcile()
+
+        assertWithMessage(report.toString()).that(report.quarantined).isEqualTo(0)
+        assertWithMessage(report.toString()).that(report.adoptedFiles).isEqualTo(0)
+        assertThat(file.exists()).isTrue()
+        assertThat(database.segments().count()).isEqualTo(0)
     }
 
     @Test

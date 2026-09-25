@@ -230,7 +230,9 @@ fun PlayerScreen(
                     when (val checked = verdict) {
                         null -> Message("Checking the clip…", Modifier.fillMaxSize())
 
-                        is Mp4Verdict.Playable -> {
+                        // Whole, or whole but not describable by the metadata reader just now:
+                        // the player is the better judge, and reports its own failures.
+                        is Mp4Verdict.Playable, is Mp4Verdict.IndexedButUnread -> {
                             VideoPlayer(item = item, modifier = Modifier.fillMaxWidth().weight(1f))
                             SegmentDetails(item = item, modifier = Modifier.fillMaxWidth())
                             position?.let { current ->

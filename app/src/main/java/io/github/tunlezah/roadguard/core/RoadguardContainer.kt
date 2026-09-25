@@ -22,6 +22,7 @@ import io.github.tunlezah.roadguard.recording.SessionJournal
 import io.github.tunlezah.roadguard.settings.Settings
 import io.github.tunlezah.roadguard.settings.SettingsRepository
 import io.github.tunlezah.roadguard.storage.StorageManager
+import io.github.tunlezah.roadguard.storage.ReconcileReport
 import io.github.tunlezah.roadguard.storage.StorageReconciler
 import io.github.tunlezah.roadguard.thermal.AndroidThermalSource
 import io.github.tunlezah.roadguard.thermal.SimulatedThermalSource
@@ -266,7 +267,16 @@ class RoadguardContainer(private val appContext: Context) {
                         lastReconcileReport = report
                         lastReconcileAtEpochMs = System.currentTimeMillis()
                     }
-                    .onFailure { Log.e(TAG, "start-up reconciliation failed", it) }
+                    .onFailure { failure ->
+                        // Diagnostics must show that the pass failed, not "not run yet": a
+                        // failed pass is the difference between footage that was never written
+                        // and footage that is on the disk waiting to be re-indexed.
+                        Log.e(TAG, "start-up reconciliation failed", failure)
+                        lastReconcileReport = ReconcileReport.skipped(
+                            "the pass failed before it finished: ${failure.message ?: failure.javaClass.simpleName}",
+                        )
+                        lastReconcileAtEpochMs = System.currentTimeMillis()
+                    }
                 runCatching { storageManager.refresh(loaded.loopBudgetBytes) }
             } finally {
                 // Whatever happened, the recorder must not wait for this any longer.

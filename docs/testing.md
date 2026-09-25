@@ -15,7 +15,7 @@
 ./gradlew :app:testDebugUnitTest
 ```
 
-**628 tests. 0 failures. 0 errors. 0 skipped.** About 50 seconds of test execution on a warm
+**637 tests. 0 failures. 0 errors. 0 skipped.** About 50 seconds of test execution on a warm
 build.
 
 | Suite | Tests | What it holds in place |
@@ -26,7 +26,8 @@ build.
 | `ThermalPolicyTest` | 25 | Immediate escalation, the 90 s de-escalation hold, single-step descent, signal priority, battery fallback only when nothing better exists |
 | `ProtectionPlannerTest` | 25 | Overlap-not-containment, boundary-straddling events claiming both segments, in-progress segments counting only to *now*, crash-interrupted recovery |
 | `PlaceRankingTest` | 14 | Which suburb, town or city a coordinate is named after, against the places decoded from the real archives around Canberra: the 3/8/20 km radii, population settling Canberra over Queanbeyan, towns never standing in for cities, duplicate collapse |
-| `StorageReconcilerTest` | 10 | **Robolectric**, real files and an in-memory Room database. An empty or unreadable recordings folder never empties the index; a missing chosen volume stops the pass; an interrupted clip is recovered or quarantined by what its file holds; a finished clip with no index is quarantined and the one before it kept; a lost file is adopted |
+| `StorageReconcilerTest` | 13 | **Robolectric**, real files and an in-memory Room database. An empty or unreadable recordings folder never empties the index; a missing chosen volume stops the pass; an interrupted clip is recovered or quarantined by what its file holds, and left alone when it is whole but unreadable; a finished clip with no index, or an index cut short, is quarantined and the one before it kept; a lost file is adopted, or left in place when whole but unreadable |
+| `Mp4InspectorTest` | 6 | **Robolectric.** Playable, whole-but-unread and truncated verdicts follow the file's bytes; an index box cut short at the end of the file does not count as an index; the box scan stops at a box that overruns |
 | `MainChromeUiTest` | 27 | **Compose UI.** Start/stop mapping to recorder state — including Stop during the start-up countdown and while reconnecting — protect enabled across a rollover and while reconnecting, every control's content description, status chips appearing and disappearing correctly |
 | `PreviewFitTest` | 19 | Auto fill-to-panel, the 1.35× ceiling, road bias, crop and letterbox reporting, degenerate inputs |
 | `ImpactDetectorTest` | 19 | Every detector stage: windowing, features, each discriminator, confidence arithmetic, cooldown |
@@ -76,7 +77,7 @@ all answered by code that is exhaustively exercised on every push.
 
 ## 3. Compose UI tests that run on the JVM
 
-82 of the 628 are real Compose UI tests: they compose the production composables, read the
+82 of the 637 are real Compose UI tests: they compose the production composables, read the
 semantics tree, and perform clicks. They live in `src/test` under Robolectric rather than in
 `src/androidTest`, which is a deliberate trade:
 
