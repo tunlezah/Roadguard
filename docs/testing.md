@@ -15,7 +15,7 @@
 ./gradlew :app:testDebugUnitTest
 ```
 
-**610 tests. 0 failures. 0 errors. 0 skipped.** About 50 seconds of test execution on a warm
+**628 tests. 0 failures. 0 errors. 0 skipped.** About 50 seconds of test execution on a warm
 build.
 
 | Suite | Tests | What it holds in place |
@@ -26,6 +26,7 @@ build.
 | `ThermalPolicyTest` | 25 | Immediate escalation, the 90 s de-escalation hold, single-step descent, signal priority, battery fallback only when nothing better exists |
 | `ProtectionPlannerTest` | 25 | Overlap-not-containment, boundary-straddling events claiming both segments, in-progress segments counting only to *now*, crash-interrupted recovery |
 | `PlaceRankingTest` | 14 | Which suburb, town or city a coordinate is named after, against the places decoded from the real archives around Canberra: the 3/8/20 km radii, population settling Canberra over Queanbeyan, towns never standing in for cities, duplicate collapse |
+| `StorageReconcilerTest` | 10 | **Robolectric**, real files and an in-memory Room database. An empty or unreadable recordings folder never empties the index; a missing chosen volume stops the pass; an interrupted clip is recovered or quarantined by what its file holds; a finished clip with no index is quarantined and the one before it kept; a lost file is adopted |
 | `MainChromeUiTest` | 27 | **Compose UI.** Start/stop mapping to recorder state — including Stop during the start-up countdown and while reconnecting — protect enabled across a rollover and while reconnecting, every control's content description, status chips appearing and disappearing correctly |
 | `PreviewFitTest` | 19 | Auto fill-to-panel, the 1.35× ceiling, road bias, crop and letterbox reporting, degenerate inputs |
 | `ImpactDetectorTest` | 19 | Every detector stage: windowing, features, each discriminator, confidence arithmetic, cooldown |
@@ -47,7 +48,8 @@ build.
 | `LocationRequestsTest` | 16 | Shared ownership of the GNSS receiver: shortest interval wins, releasing one client leaves the others running, and thermal throttling of the recorder cannot slow the map down |
 | `OverlayLayoutTest` | 18 | The burned-in overlay never draws one label over another: every ladder resolution in both orientations, all 63 non-empty field combinations, two font metrics, hostile strings, and the arrangement/shrink fallbacks |
 | `TripAssemblerTest` | 10 | The 2-minute gap rule that groups clips into trips and continues a trip after a relaunch, at the boundary, out of order, and with clocks that disagree |
-| `GalleryTripUiTest` | 10 | **Compose UI.** A trip card names the drive and its counts, hides its clips until asked, offers the track buttons only when a track exists, protects a whole trip from its menu, and still shows clips no trip has claimed |
+| `GalleryTripUiTest` | 12 | **Compose UI.** A trip card names the drive and its counts, hides its clips until asked, offers the track buttons only when a track exists, protects a whole trip from its menu, still shows clips no trip has claimed, says where to look when the list is empty, and marks a clip still being recorded as unopenable |
+| `PlaybackProblemsTest` | 6 | What the player says when playback fails: missing, unreadable, damaged, undecodable, each in words a driver can act on |
 | `PmtilesReaderTest` | 9 | PMTiles tile ids per the spec, tile coordinates, and reading tiles through root and leaf directories and run-length entries of a hand-built archive, then decoding its `places` layer |
 | `GpxWriterTest` | 9 | The track is a valid GPX document before any point and after each one, reopens for appending, renames both `<name>` elements atomically, and reads back thinned for the route thumbnail |
 | `TripNamingTest` | 9 | Suburbs by default, cities between cities, towns alone in the country, loops, unknown ends and the time-based fallback |
@@ -67,14 +69,14 @@ build.
 `PowerPolicy` and `RecoveryPolicy` import **nothing** from `android.*`. They take value types in and return value types
 out.
 
-That is the deliberate architectural choice that makes 458 plain-JVM tests possible without a
+That is the deliberate architectural choice that makes 464 plain-JVM tests possible without a
 device, and it means the questions a dashcam actually gets wrong — *when* does it delete, *when*
 does it reduce quality, *which* segments does an event protect, *is* that spike a collision — are
 all answered by code that is exhaustively exercised on every push.
 
 ## 3. Compose UI tests that run on the JVM
 
-80 of the 610 are real Compose UI tests: they compose the production composables, read the
+82 of the 628 are real Compose UI tests: they compose the production composables, read the
 semantics tree, and perform clicks. They live in `src/test` under Robolectric rather than in
 `src/androidTest`, which is a deliberate trade:
 
@@ -130,7 +132,7 @@ database or real hardware, and those paths are consequently unverified end to en
 
 | Path | Why it needs a device or emulator |
 | --- | --- |
-| `StorageReconciler`'s five repair cases | needs a real filesystem and a real Room database |
+| `StorageReconciler` against files a real muxer wrote | its repairs run under Robolectric against hand-built MP4 structures (`StorageReconcilerTest`); real recordings, and a real card that is slow to mount, have not been tried |
 | `Mp4Inspector` against real files | needs files a real muxer wrote, including a genuinely truncated one |
 | Map download → install → render | needs the network, the filesystem and a GPU. The *verification* step is now unit tested (`PmtilesArchiveTest`); the download, install and render steps are not |
 | `RecordingController`'s segment loop, recovery and stall watchdog | needs a camera. The recovery schedule, the failure classification, the wake-lock rule and the notification wording are unit tested (`RecoveryPolicyTest`, `RecordingUiStateTest`, `RecordingNotificationContentTest`), and so is the ordering of Stop against Start (`RecordingControllerStopTest`) |
@@ -302,6 +304,16 @@ In priority order. Items 1–4 are the ones that would find a real bug fastest.
 44. Revoke the location permission in system settings, reopen Roadguard with location still on in
     its settings, and start recording. Expect recording to start without location, not a crash
     or a silent failure.
+45. **Let the battery run flat while recording**, unplugged, screen off. Expect recording to stop
+    at 3 % with a "stopped recording" alert, the last clip playable, and every earlier clip still
+    listed after the phone restarts. Then pull the battery (or hold power off) mid-clip at a
+    higher level: expect exactly one quarantined clip and nothing else missing.
+46. With a microSD card selected, reboot and open Roadguard within seconds of unlocking. Expect
+    the recordings list intact, or "missing" entries that come back on the next start, never an
+    empty list with files still on the card.
+47. Open a clip, rotate the phone, press Home mid-playback and come back. Expect playback to
+    continue across the rotation and to resume paused at the same position from the background.
+    Open a clip that is still being recorded: expect "still being recorded", not "damaged".
 
 ## 7. How to add a test
 

@@ -130,12 +130,13 @@ design. It also means protection survives total loss of the database.
 
 Roadguard assumes the last run ended badly, because sooner or later it did.
 `StorageReconciler` runs once at start-up, before the recorder can index anything, and repairs
-nine defined divergences:
+ten defined divergences:
 
 | Situation | Cause | Repair |
 | --- | --- | --- |
 | Row marked incomplete | killed mid-recording | inspect the file; index it if playable, quarantine it if not |
-| Row with no file | user deleted it, or the card was swapped | drop the row |
+| Newest finished clip with no index | power lost before the file reached the disk | quarantine it |
+| Row with no file | user deleted it, or the card was swapped | drop the row — only while other recordings are present |
 | File with no row | crash between muxer finalise and index insert | inspect and adopt it |
 | File with a protection sidecar but an unprotected row | crash between marking and indexing | re-apply protection |
 | Event stuck awaiting post-roll | killed just after an impact | close it with whatever footage exists |
@@ -147,6 +148,23 @@ nine defined divergences:
 **The bias throughout is to keep footage.** A file that cannot be verified is moved to
 `quarantine/` and reported — never deleted. The truncated segment may be exactly the one the
 user needs, and a human with a repair tool can do more with it than Roadguard can.
+
+**The index is never emptied on the strength of an empty folder.** Every repair compares the index
+with a directory listing, and that listing is only meaningful when the folder is the one the rows
+were written into and it is readable. A card still mounting after boot, shared storage not yet
+served after unlock, or a volume switched in Settings all produce an empty listing, and the pass
+used to drop every row on it — and with the rows the trips, the tracks and the protection marks —
+for footage that was on the disk the whole time. A folder that cannot be listed now stops the
+pass; a folder holding no earlier recording keeps every row whose file is missing, shown as
+missing in the list and counted in the report, until a start-up that can tell the difference.
+
+**A finished clip is on the medium before its row says so.** The muxer closes a clip without
+syncing it, so its last seconds — and the index at its very end — can sit in the kernel's write
+cache for up to half a minute. A phone that loses power in that window used to be left with a row
+saying "complete" for a file that was not. The recorder now flushes each clip to the storage
+before marking its row, and the reconciler checks the newest finished clips for an index at every
+start, quarantining one that has none. Only the structure is read for that check, so a passing
+metadata failure cannot send a good clip to quarantine.
 
 `ReconcileReport` is surfaced in Diagnostics, so a user who lost power mid-drive can see
 precisely what was repaired.
@@ -183,6 +201,8 @@ path of a dashcam would be a worse outcome than saying "this file is damaged, he
 | Free space below the reserve at start-up | recording does not start; the Storage screen explains what to free |
 | Write error mid-segment | classified by `handleFinalizeError`; the file is inspected and kept if playable, and recording is restarted with backoff for as long as the session lasts (`docs/architecture.md` §3.2) |
 | Phone switched off while recording | the shutdown broadcast closes the current file first |
+| Battery flat while recording | recording stops cleanly at 3 % (not charging) and the clip is closed; a phone that dies sooner loses only the clip in progress, which is quarantined. A session cannot be started on a battery already at the floor |
+| Chosen volume not mounted at start | recording refuses with a "storage volume is not available" blocker rather than writing onto another volume, and reconciliation stands down |
 | App killed while recording | the clip in progress is repaired or quarantined on the next start, and a notification offers to resume recording with one tap |
 | Database corrupt or deleted | the reconciler adopts every file it finds and re-applies protection from sidecars. No footage is lost |
 

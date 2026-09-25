@@ -92,7 +92,9 @@ the moment a start begins until the session's last MP4 has been finalised. That 
 stop with the screen off is exactly when the CPU would otherwise sleep in between. The lock
 carries a 60-minute timeout that is renewed every 10 minutes while it is needed, so a crashed
 component cannot leak it for longer than an hour. Recovery holds it for at most five minutes
-(§3.2).
+(§3.2). Each finished clip is flushed to the storage medium before its index row is marked
+complete, so a power failure moments after a clip closes cannot leave a "complete" row for a file
+with no index (`docs/storage.md` §6).
 
 Three more platform facts shape the service:
 

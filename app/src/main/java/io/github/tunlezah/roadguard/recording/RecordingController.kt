@@ -453,6 +453,19 @@ class RecordingController(
             update { it.copy(status = RecorderStatus.Idle, blockers = blockers.map { blocker -> blocker.blocker }) }
             return@withLock
         }
+        // The battery monitor only acts on a *change* while a session is running. A session
+        // started on a battery that is already at the floor would otherwise record until the
+        // phone died mid-clip, which is the one ending that loses footage.
+        if (PowerPolicy.evaluateBattery(powerMonitor.state.value, settings) is PowerAction.StopForLowBattery) {
+            update {
+                it.copy(
+                    status = RecorderStatus.Idle,
+                    blockers = listOf(RecordingBlocker.LowBattery),
+                    lastErrorMessage = RecordingBlocker.LowBattery.message,
+                )
+            }
+            return@withLock
+        }
         update {
             it.copy(
                 status = RecorderStatus.Starting,
@@ -473,12 +486,26 @@ class RecordingController(
         awaitStartupRepair()
         if (!isCurrent(token)) return@withLock abandonStart()
 
-        val roomToRecord = runCatchingNonCancellation {
+        val volumeReady = runCatchingNonCancellation {
             withContext(Dispatchers.IO) { storage.useVolume(settings.storageVolumeId) }
-            // The loop may be holding space other apps have since eaten into; delete old loop
-            // footage before refusing to record for want of room.
-            makeRoom()
+            !storage.requestedVolumeMissing
+        } ?: false
+        if (!volumeReady) {
+            // Recording onto whatever volume is left would scatter one drive's footage across two
+            // devices, and the next start-up would compare the index against the wrong one.
+            Log.w(TAG, "the chosen recording volume is not mounted; not starting")
+            update {
+                it.copy(
+                    status = RecorderStatus.Idle,
+                    blockers = listOf(RecordingBlocker.StorageUnavailable),
+                    lastErrorMessage = RecordingBlocker.StorageUnavailable.message,
+                )
+            }
+            return@withLock
         }
+        // The loop may be holding space other apps have since eaten into; delete old loop
+        // footage before refusing to record for want of room.
+        val roomToRecord = runCatchingNonCancellation { makeRoom() }
         if (roomToRecord != true) {
             update {
                 it.copy(
@@ -1024,7 +1051,6 @@ class RecordingController(
 
     private suspend fun onFinalize(handle: SegmentHandle, event: VideoRecordEvent.Finalize) {
         liveSegments.remove(handle)
-        publishUnfinalized()
         val wasActive = handle === activeSegment
         if (wasActive) {
             // Nothing was queued behind this recording: it ended without our stop (the duration
@@ -1039,6 +1065,8 @@ class RecordingController(
         // "recording" with nothing recording.
         val durationMs = event.recordingStats.recordedDurationNanos / 1_000_000
         val kept = runCatchingNonCancellation { indexFinalisedSegment(handle, event, durationMs) } ?: false
+        // Only now does the clip stop holding the wake lock: it is on the disk and in the index.
+        publishUnfinalized()
         update {
             it.copy(
                 sessionDurationMs = it.sessionDurationMs + if (kept) durationMs else 0L,
@@ -1094,6 +1122,10 @@ class RecordingController(
         val exists = file.exists() && file.length() > 0
         val trusted = !event.hasError() || event.error in TRUSTED_FINALIZE_ERRORS
         val usable = exists && (trusted || Mp4Inspector.inspect(file).isUsable)
+        // Onto the medium before the row says "complete": the muxer leaves the clip's end, index
+        // included, in the write cache, and a flat battery within the next half minute would
+        // otherwise take it. See StorageManager.flushToDisk.
+        if (usable) storage.flushToDisk(file)
         val segmentId = handle.segmentId ?: return@withContext usable
         if (usable) {
             val location = locationEngine.state.value

@@ -542,7 +542,8 @@ private fun SegmentRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = item.exists, onClick = onOpen)
+            // A clip still being written has no index to play from yet.
+            .clickable(enabled = item.exists && !item.inProgress, onClick = onOpen)
             .padding(horizontal = 4.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -551,6 +552,7 @@ private fun SegmentRow(
             painter = painterResource(
                 when {
                     !item.exists -> R.drawable.ic_error_outline
+                    item.inProgress -> R.drawable.ic_fiber_manual_record
                     item.event != null -> R.drawable.ic_report_problem
                     item.isProtected -> R.drawable.ic_lock
                     else -> R.drawable.ic_movie
@@ -559,6 +561,7 @@ private fun SegmentRow(
             contentDescription = null,
             tint = when {
                 !item.exists -> status.critical
+                item.inProgress -> status.recording
                 item.event != null -> status.warning
                 item.isProtected -> status.protected
                 else -> MaterialTheme.colorScheme.onSurfaceVariant
@@ -572,13 +575,17 @@ private fun SegmentRow(
                 style = MaterialTheme.typography.bodyLarge,
             )
             Text(
-                text = buildList {
-                    add(GalleryFormat.clipDuration(segment.durationMs))
-                    add(GalleryFormat.size(segment.sizeBytes))
-                    if (segment.widthPx > 0) add("${segment.widthPx}x${segment.heightPx}")
-                    if (segment.frameRate > 0) add("${segment.frameRate} fps")
-                    if (segment.hasAudio) add("audio")
-                }.joinToString("  ·  "),
+                text = if (item.inProgress) {
+                    "Still recording  ·  playable once it is finished"
+                } else {
+                    buildList {
+                        add(GalleryFormat.clipDuration(segment.durationMs))
+                        add(GalleryFormat.size(segment.sizeBytes))
+                        if (segment.widthPx > 0) add("${segment.widthPx}x${segment.heightPx}")
+                        if (segment.frameRate > 0) add("${segment.frameRate} fps")
+                        if (segment.hasAudio) add("audio")
+                    }.joinToString("  ·  ")
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -637,7 +644,7 @@ private fun SegmentRow(
                 DropdownMenuItem(
                     text = { Text("Share") },
                     leadingIcon = { Icon(Icons.Filled.Share, contentDescription = null) },
-                    enabled = item.exists,
+                    enabled = item.exists && !item.inProgress,
                     onClick = {
                         onShare()
                         menuOpen = false
@@ -648,7 +655,7 @@ private fun SegmentRow(
                     leadingIcon = {
                         Icon(painterResource(R.drawable.ic_delete_sweep), contentDescription = null)
                     },
-                    enabled = !item.isProtected,
+                    enabled = !item.isProtected && !item.inProgress,
                     onClick = {
                         onDelete()
                         menuOpen = false
@@ -697,6 +704,18 @@ private fun EmptyState(filter: GalleryFilter, totalCount: Int, modifier: Modifie
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
+        if (totalCount == 0) {
+            // Somebody who expected footage here needs to know where to look, not just that the
+            // list is empty: files still on disk, files in quarantine, and what the last start-up
+            // did with them are all one screen away.
+            Text(
+                text = "If you expected recordings here, Settings → Diagnostics shows what is on disk, " +
+                    "what is in quarantine, and what the last start-up repaired or removed.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+        }
     }
 }
 

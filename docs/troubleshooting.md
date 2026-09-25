@@ -60,6 +60,46 @@ card, frames that stop arriving — does **not** end the recording. Roadguard sh
 Heat is **not** on this list either. Roadguard never stops recording for thermal reasons — it
 reduces quality instead.
 
+### The battery went flat while recording
+
+At 3 % (not charging) Roadguard stops recording on purpose and closes the clip in progress
+cleanly, then posts a "Roadguard stopped recording" alert naming the battery level. Every clip
+finished before that is on the disk and in the list. If the phone died before it reached 3 % --
+some phones shut down with little warning, or the app had already been killed -- only the clip in
+progress is lost: it has no index yet, and the next start-up moves it to quarantine and says so.
+
+Two things used to turn that one lost clip into "everything is gone", and both are fixed:
+
+* **The start-up check dropped the whole index.** After a reboot the recordings folder can be
+  empty or unreadable for a moment (a memory card still mounting, shared storage not yet served
+  after the phone is unlocked). The check compared the index with that empty folder, concluded
+  every clip had been deleted, and removed every entry — trips, tracks and protection marks
+  included — while the files sat on the disk untouched. It now refuses to judge an unreadable
+  folder, and a folder holding no earlier recording keeps every entry, shown as *missing*, until
+  a start-up that can tell the difference. Diagnostics → Startup reconciliation → *Index rows
+  dropped* is where that loss showed; *Missing files kept in the index* is the new line.
+* **The last finished clip could be unplayable.** A finished clip is closed without being forced
+  to the disk, so a phone that lost power within half a minute of a clip finishing could keep an
+  entry saying "complete" for a file whose end never made it. Each clip is now flushed to the
+  storage before its entry is marked complete, and the newest finished clips are checked for an
+  index at every start-up.
+
+**If this has already happened to you**, the footage may well still be there:
+
+1. Force-close Roadguard and open it again. Files on disk that lost their index entry are
+   re-indexed at start-up, as "recovered" clips grouped into trips.
+2. Settings → Diagnostics → *Recordings on disk* says how many clip files are actually in the
+   folder; *Startup reconciliation* says what the last start recovered, re-indexed, quarantined or
+   dropped; *Quarantined files* lists clips that could not be played and why.
+3. A quarantined clip is in `Android/data/io.github.tunlezah.roadguard/files/quarantine/` over
+   USB, and can usually be repaired on a computer with `untrunc` or `ffmpeg`.
+
+Also check the loop size. Recording is a loop, not an archive: with the default 5 GB budget the
+loop holds well under an hour of 1080p footage, so most of a full day is deleted, oldest first,
+long before the battery runs down. Diagnostics → Storage → *Loop coverage* shows how much history
+the loop keeps at the measured bitrate. Raise the budget (Settings → Storage) or protect the trips
+you want to keep; protected footage is never deleted by the loop.
+
 ### Recording says “Reconnecting”
 
 Something stopped the frames and Roadguard is bringing the recorder back. It retries after 1, 2,
@@ -105,6 +145,8 @@ If the in-app Recordings list itself is empty or missing a drive:
 | What happened | Why | What you see |
 | --- | --- | --- |
 | The app was killed mid-clip | battery optimisation, a vendor "app sleep" list, swiping the app away on some launchers, or a power cut at ignition-off. An MP4 only becomes playable when its index is written **at the end** of the clip, so a clip cut off in the middle has no index | the interrupted clip is moved to `quarantine/` on the next start — the quarantine count in **Diagnostics → storage** rises — rather than shown as a normal recording. A drive shorter than one segment (default 3 min) that ends in a kill can leave *nothing* in the list |
+| The recordings folder was not ready when the app started | a memory card still mounting after a reboot, or shared storage not yet served after unlocking | the start-up check used to drop every index entry, hiding footage that was still on the disk. It now keeps the entries (shown as *missing*) and re-checks at the next start; force-closing and reopening the app re-indexes anything that was lost this way |
+| The battery went flat | see *The battery went flat while recording* above | at most the clip in progress is lost, and it is quarantined rather than deleted |
 | The encoder failed repeatedly | a device whose hardware encoder rejects the stream | each failed clip is quarantined and the reason is in the recent events list |
 | A microSD card was chosen and is not mounted | the card was ejected or slow to mount | Roadguard stands down rather than dropping the index or scattering footage onto internal storage; re-seat the card |
 
@@ -238,10 +280,16 @@ unprotect, or export and delete.
 
 ### A file will not play
 
-Check Diagnostics → reconciliation report. If the file is in `quarantine/`, the MP4 inspector
-found it structurally incomplete — almost always `TruncatedNoIndex`, meaning the video data is
-probably all there but the muxer never wrote the `moov` index, so no ordinary player will open
-it.
+The player says why. Before it opens a clip it checks the file, off the main thread, and reports
+one of: the file is missing; the clip is still being recorded (it can be played once it is
+finished); or the file is structurally incomplete, with the inspector's verdict. If playback then
+fails part-way, the message names the cause -- the file could not be read, the file is damaged, or
+this phone could not decode it -- and offers *Try again*. Leaving the screen, or the app, releases
+the decoder so it can never compete with the recorder; coming back resumes where you were.
+
+If the file is in `quarantine/`, the MP4 inspector found it structurally incomplete — almost
+always `TruncatedNoIndex`, meaning the video data is probably all there but the muxer never wrote
+the `moov` index, so no ordinary player will open it.
 
 Roadguard **keeps** such files rather than deleting them, and does not attempt repair. Recovery
 is possible with `untrunc` or with `ffmpeg`'s error-resilient demuxers on a desktop. The cause

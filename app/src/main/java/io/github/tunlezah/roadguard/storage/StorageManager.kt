@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.RandomAccessFile
 import java.text.SimpleDateFormat
 import java.util.Collections
 import java.util.Date
@@ -30,6 +31,11 @@ class StorageManager(
     private val context: Context,
     private val segments: SegmentDao,
     private val trips: TripDao,
+    /**
+     * Where to start. Production leaves this null and uses the primary volume until the persisted
+     * choice is applied by [useVolume]; tests hand in a folder of their own.
+     */
+    initialLayout: StorageLayout? = null,
 ) {
     private val _assessment = MutableStateFlow<StorageAssessment?>(null)
     val assessment: StateFlow<StorageAssessment?> = _assessment.asStateFlow()
@@ -45,7 +51,7 @@ class StorageManager(
     var activeTripId: Long? = null
 
     @Volatile
-    var layout: StorageLayout = StorageLayout.forVolume(context, null)
+    var layout: StorageLayout = initialLayout ?: StorageLayout.forVolume(context, null)
         private set
 
     private val _layoutGeneration = MutableStateFlow(0)
@@ -83,12 +89,34 @@ class StorageManager(
     fun isFromThisProcess(fileName: String): Boolean = fileName in createdThisProcess
 
     fun useVolume(volumeId: String?) {
-        requestedVolumeMissing = volumeId != null &&
-            StorageLayout.availableVolumes(context).none { StorageLayout.volumeIdOf(it) == volumeId }
+        val available = StorageLayout.availableVolumes(context)
+        // A chosen card that is not mounted; or, rarer and seen right after boot, no external
+        // volume listed at all, in which case the layout falls back to private internal storage.
+        // Either way nothing recorded is where the index says it is: the reconciler must not
+        // judge rows against this layout, and the recorder must not write into it.
+        requestedVolumeMissing = if (volumeId != null) {
+            available.none { StorageLayout.volumeIdOf(it) == volumeId }
+        } else {
+            available.isEmpty()
+        }
         layout = StorageLayout.forVolume(context, volumeId)
         layout.ensureDirectories()
         _layoutGeneration.value += 1
     }
+
+    /**
+     * Forces [file]'s contents onto the storage medium.
+     *
+     * The muxer closes a finished clip without syncing it, so its last seconds -- and the index at
+     * its very end, without which no player can open it -- can sit in the kernel's write cache for
+     * up to half a minute. A phone that loses power in that window is left with a row saying the
+     * clip is complete and a file that is not. Called once per clip, off the main thread, before
+     * its row is marked complete. Best effort: a volume that refuses is logged, not fatal.
+     */
+    fun flushToDisk(file: File): Boolean = runCatching {
+        RandomAccessFile(file, "rw").use { it.fd.sync() }
+        true
+    }.onFailure { Log.w(TAG, "could not flush ${file.name} to disk", it) }.getOrDefault(false)
 
     /** Volumes the user may choose between, with their sizes, for the storage screen. */
     fun volumeOptions(): List<StorageVolumeOption> =
