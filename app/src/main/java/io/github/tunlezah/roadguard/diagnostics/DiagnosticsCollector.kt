@@ -451,6 +451,14 @@ class DiagnosticsCollector(
                         if (report.droppedRows > 0) EntrySeverity.Warning else EntrySeverity.Normal,
                     ),
                 )
+                add(
+                    DiagnosticsEntry(
+                        "Missing files kept in the index",
+                        "${report.keptMissing}",
+                        Provenance.Measured,
+                        if (report.keptMissing > 0) EntrySeverity.Warning else EntrySeverity.Normal,
+                    ),
+                )
                 add(DiagnosticsEntry("Interrupted events closed", "${report.closedEvents}", Provenance.Measured))
                 add(DiagnosticsEntry("Clips grouped into trips", "${report.tripsAssembled}", Provenance.Measured))
                 add(DiagnosticsEntry("Interrupted trips closed", "${report.tripsClosed}", Provenance.Measured))

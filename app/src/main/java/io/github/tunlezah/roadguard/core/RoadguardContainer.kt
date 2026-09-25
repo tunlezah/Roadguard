@@ -1,6 +1,7 @@
 package io.github.tunlezah.roadguard.core
 
 import android.content.Context
+import android.util.Log
 import io.github.tunlezah.roadguard.RoadguardApplication
 import io.github.tunlezah.roadguard.camera.CameraOrientationTracker
 import io.github.tunlezah.roadguard.camera.CameraSession
@@ -17,9 +18,11 @@ import io.github.tunlezah.roadguard.map.PlaceLookup
 import io.github.tunlezah.roadguard.overlay.OverlayComposer
 import io.github.tunlezah.roadguard.power.PowerMonitor
 import io.github.tunlezah.roadguard.recording.RecordingController
+import io.github.tunlezah.roadguard.recording.SessionJournal
 import io.github.tunlezah.roadguard.settings.Settings
 import io.github.tunlezah.roadguard.settings.SettingsRepository
 import io.github.tunlezah.roadguard.storage.StorageManager
+import io.github.tunlezah.roadguard.storage.ReconcileReport
 import io.github.tunlezah.roadguard.storage.StorageReconciler
 import io.github.tunlezah.roadguard.thermal.AndroidThermalSource
 import io.github.tunlezah.roadguard.thermal.SimulatedThermalSource
@@ -27,6 +30,8 @@ import io.github.tunlezah.roadguard.thermal.ThermalSource
 import io.github.tunlezah.roadguard.trip.TripRepository
 import io.github.tunlezah.roadguard.weather.OpenMeteoWeatherSource
 import io.github.tunlezah.roadguard.weather.WeatherRepository
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -35,6 +40,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.Executors
 
 /**
@@ -52,13 +58,32 @@ import java.util.concurrent.Executors
  */
 class RoadguardContainer(private val appContext: Context) {
 
+    /** When this process started, so start-up repair can tell this run's work from the last one's. */
+    private val processStartedAtEpochMs: Long = System.currentTimeMillis()
+
     /**
      * Application-lifetime scope.
      *
      * `SupervisorJob` so one failing subsystem -- say weather -- cannot cancel the recorder, which
-     * is the whole point of the app.
+     * is the whole point of the app. And an exception handler, because without one an exception
+     * escaping *any* coroutine here goes to the thread's default handler, which on Android kills
+     * the process -- mid-recording, leaving the file being written without its index. A logged
+     * failure in one subsystem is always better than a dead dashcam.
      */
-    val applicationScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val applicationScope: CoroutineScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, error ->
+            Log.e(TAG, "uncaught failure in a background task; the app keeps running", error)
+        },
+    )
+
+    /**
+     * Completed once start-up reconciliation has finished (or failed). The recorder waits for it,
+     * bounded, before writing its first segment: see [RecordingController].
+     */
+    private val startupRepair = CompletableDeferred<Unit>()
+
+    /** Remembers whether a recording was running, across process death. */
+    val sessionJournal: SessionJournal by lazy { SessionJournal(appContext) }
 
     private val locationExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "roadguard-location")
@@ -198,6 +223,8 @@ class RoadguardContainer(private val appContext: Context) {
             orientationTracker = orientationTracker,
             overlayComposer = OverlayComposer(),
             weatherState = weatherRepository.state,
+            journal = sessionJournal,
+            awaitStartupRepair = { withTimeoutOrNull(STARTUP_REPAIR_WAIT_MS) { startupRepair.await() } },
         )
     }
 
@@ -228,22 +255,47 @@ class RoadguardContainer(private val appContext: Context) {
      */
     fun onApplicationCreate() {
         applicationScope.launch {
-            // Wait for the settings actually persisted on disk. The hot [settings] StateFlow
-            // reports the compiled-in defaults until DataStore's first read lands, and those
-            // defaults say "internal storage": reconciling against the wrong volume would treat
-            // every file on the chosen one as gone and drop its index rows.
-            val loaded = settingsRepository.settings.first()
-            storageManager.useVolume(loaded.storageVolumeId)
-            runCatching { storageReconciler.reconcile() }
-                .onSuccess { report ->
-                    lastReconcileReport = report
-                    lastReconcileAtEpochMs = System.currentTimeMillis()
-                }
-            runCatching { storageManager.refresh(loaded.loopBudgetBytes) }
+            try {
+                // Wait for the settings actually persisted on disk. The hot [settings] StateFlow
+                // reports the compiled-in defaults until DataStore's first read lands, and those
+                // defaults say "internal storage": reconciling against the wrong volume would treat
+                // every file on the chosen one as gone and drop its index rows.
+                val loaded = settingsRepository.settings.first()
+                storageManager.useVolume(loaded.storageVolumeId)
+                runCatching { storageReconciler.reconcile(sessionStartedAtEpochMs = processStartedAtEpochMs) }
+                    .onSuccess { report ->
+                        lastReconcileReport = report
+                        lastReconcileAtEpochMs = System.currentTimeMillis()
+                    }
+                    .onFailure { failure ->
+                        // Diagnostics must show that the pass failed, not "not run yet": a
+                        // failed pass is the difference between footage that was never written
+                        // and footage that is on the disk waiting to be re-indexed.
+                        Log.e(TAG, "start-up reconciliation failed", failure)
+                        lastReconcileReport = ReconcileReport.skipped(
+                            "the pass failed before it finished: ${failure.message ?: failure.javaClass.simpleName}",
+                        )
+                        lastReconcileAtEpochMs = System.currentTimeMillis()
+                    }
+                runCatching { storageManager.refresh(loaded.loopBudgetBytes) }
+            } finally {
+                // Whatever happened, the recorder must not wait for this any longer.
+                startupRepair.complete(Unit)
+            }
         }
     }
 
     companion object {
+        private const val TAG = "RoadguardContainer"
+
+        /**
+         * The longest the recorder waits for start-up reconciliation before its first segment.
+         * Reconciliation normally takes well under a second; the bound is there so a pathological
+         * volume can delay recording, never prevent it. If it is ever hit, the reconciler still
+         * leaves this run's files alone ([StorageManager.isFromThisProcess]).
+         */
+        const val STARTUP_REPAIR_WAIT_MS = 10_000L
+
         fun from(context: Context): RoadguardContainer =
             (context.applicationContext as RoadguardApplication).container
     }

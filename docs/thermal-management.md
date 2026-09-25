@@ -76,6 +76,13 @@ with the user's settings and the device profile, and only ever reduces.
 | User warned | no | no | **yes** | **yes** |
 | **Recording continues** | yes | yes | yes | **yes** |
 
+What the map row means on screen: `Full` follows the vehicle with a camera animation;
+`Reduced` moves the map once per fix with no animation and at most five frames a second;
+`Frozen` and `Off` both take the map off screen, which frees its GPU work entirely, and show a
+"paused for heat" placeholder. (The plans always set a map budget, but nothing used to read it,
+so the map animated at full rate however hot the phone was. `MapWorkBudget.forRenderBudget` now
+applies it.)
+
 Read the `Elevated` column carefully: it is entirely free of recording changes. That is the
 design. The display, the map, the preview, stabilisation and the second camera all cost real
 power and contribute nothing to the evidence, so they are spent first. Recording quality is the
@@ -111,7 +118,17 @@ signal sources.
 | Resolution, recording frame rate, bitrate, stabilisation, overlay burn-in, second camera | **At the next segment boundary only.** These are bind-time properties of the CameraX session; changing them mid-segment means truncating the file. |
 
 `ThermalPlan.requiresRebindFrom(previous)` is what decides which bucket a change falls into,
-and `SegmentPlanner` schedules the boundary. This is the single most important rule in the
+and `SegmentPlanner` schedules the boundary.
+
+### Battery-safe mode on top of the ladder
+
+Battery-safe mode (`PowerPolicy.restrain`) adds its own ceilings to whatever the thermal level
+allows, and every one of them only tightens: at least `Reduced` map rendering, no second camera,
+stabilisation or night assist, recording capped at 720p (`qualityCeiling = "HD"`, a ceiling
+rather than a step so a 720p device is not pushed to 480p) and 30 fps, GNSS every two seconds and
+reduced UI animation. Overlays and bitrate are left alone. Its recording changes follow the same
+segment-boundary rule, and a change applies only once it has held for a minute, so a flickering
+car charger cannot rebind the camera every clip. This is the single most important rule in the
 thermal design: **no thermal event ever cuts a recording short.**
 
 ## 6. The test harness

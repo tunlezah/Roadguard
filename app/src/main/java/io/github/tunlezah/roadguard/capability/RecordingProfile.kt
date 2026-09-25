@@ -42,15 +42,37 @@ data class RecordingProfile(
         }
 
     /** True when [other] differs in a way that requires the camera use cases to be rebound. */
-    fun requiresRebindFrom(other: RecordingProfile?): Boolean = other == null ||
-        other.cameraXQuality != cameraXQuality ||
-        other.frameRate != frameRate ||
-        other.codecMimeType != codecMimeType ||
-        other.targetBitrateBps != targetBitrateBps ||
-        other.stabilisation != stabilisation ||
-        other.hdr != hdr ||
-        other.dualCamera != dualCamera ||
-        other.burnInOverlays != burnInOverlays
+    fun requiresRebindFrom(other: RecordingProfile?): Boolean = other == null || other.bindKey != bindKey
+
+    /**
+     * Everything a camera bind depends on, and nothing else.
+     *
+     * Two profiles with the same key produce the same camera session, which is what lets the
+     * recorder remember that a configuration was refused and not try it again every segment.
+     */
+    val bindKey: BindKey
+        get() = BindKey(
+            cameraXQuality = cameraXQuality,
+            frameRate = frameRate,
+            codecMimeType = codecMimeType,
+            targetBitrateBps = targetBitrateBps,
+            stabilisation = stabilisation,
+            hdr = hdr,
+            dualCamera = dualCamera,
+            burnInOverlays = burnInOverlays,
+        )
+
+    /** See [bindKey]. */
+    data class BindKey(
+        val cameraXQuality: String,
+        val frameRate: Int,
+        val codecMimeType: String,
+        val targetBitrateBps: Int,
+        val stabilisation: Boolean,
+        val hdr: Boolean,
+        val dualCamera: Boolean,
+        val burnInOverlays: Boolean,
+    )
 }
 
 /**
@@ -128,8 +150,14 @@ object RecordingProfileSelector {
             }
         }
 
+        // 2b. Apply a quality ceiling. Only battery-safe mode sets one, and it is a ceiling rather
+        // than a further step so a device already at 720p is not pushed down to 480p.
+        val afterCeiling = capAt(afterThermal, thermalPlan.qualityCeiling).also {
+            if (it != afterThermal) rationale += "Battery-safe mode caps resolution at ${it.name}"
+        }
+
         // 3. Reduce to something the camera and a hardware encoder actually support.
-        val achievable = firstAchievable(afterThermal, supportedQualities, capabilities, codec, rationale)
+        val achievable = firstAchievable(afterCeiling, supportedQualities, capabilities, codec, rationale)
 
         // 4. Frame rate: requested, capped by thermal, capped by encoder.
         val requestedFps = settings.frameRate.fps ?: (AUTO_FRAME_RATE[tier] ?: 30)
@@ -272,10 +300,55 @@ object RecordingProfileSelector {
         }
     }
 
+    /**
+     * Configurations to try, in order, when the camera refuses to bind [failed].
+     *
+     * A refused bind used to end recording on the spot -- at start, or at the segment boundary
+     * where a thermal or settings change was being applied. These are the most widely supported
+     * configurations a camera offers: 720p (or 480p when that was already the request), then
+     * 480p, each at 30 fps with no stabilisation, no burn-in effect and the device's own bitrate.
+     * The burn-in effect goes because it is the one part of the session that adds a GPU stage the
+     * camera HAL knows nothing about; footage without an overlay beats no footage.
+     *
+     * Profiles identical to [failed] in everything a bind depends on are left out, so the list is
+     * empty when [failed] was already the safest configuration.
+     */
+    fun safeFallbacks(failed: RecordingProfile): List<RecordingProfile> {
+        val failedIndex = LADDER.indexOfFirst { it.name == failed.cameraXQuality }.takeIf { it >= 0 } ?: 0
+        val hdIndex = LADDER.indexOfFirst { it.name == "HD" }
+        val firstRung = LADDER[maxOf(failedIndex, hdIndex)]
+        val rungs = listOf(firstRung, LADDER.last()).distinct()
+        return rungs.map { rung ->
+            failed.copy(
+                cameraXQuality = rung.name,
+                resolution = rung.resolution,
+                frameRate = minOf(failed.frameRate, SAFE_FRAME_RATE).coerceAtLeast(1),
+                targetBitrateBps = 0,
+                stabilisation = false,
+                nightAssist = false,
+                hdr = false,
+                dualCamera = false,
+                burnInOverlays = false,
+                isAuto = false,
+                rationale = failed.rationale + "The camera refused the preferred configuration; using a safe fallback",
+            )
+        }.filter { it.bindKey != failed.bindKey }.distinctBy { it.bindKey }
+    }
+
+    /** Frame rate every camera Roadguard supports can sustain. */
+    private const val SAFE_FRAME_RATE = 30
+
     private fun stepDown(rung: Rung, steps: Int): Rung {
         if (steps <= 0) return rung
         val index = LADDER.indexOf(rung)
         return LADDER[(index + steps).coerceAtMost(LADDER.lastIndex)]
+    }
+
+    private fun capAt(rung: Rung, ceiling: String?): Rung {
+        val ceilingIndex = ceiling?.let { name -> LADDER.indexOfFirst { it.name == name } } ?: return rung
+        if (ceilingIndex < 0) return rung
+        val index = LADDER.indexOf(rung)
+        return if (index < ceilingIndex) LADDER[ceilingIndex] else rung
     }
 
     private fun firstAchievable(

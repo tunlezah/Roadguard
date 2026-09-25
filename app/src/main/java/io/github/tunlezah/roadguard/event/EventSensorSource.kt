@@ -5,6 +5,8 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Handler
+import android.os.HandlerThread
 import android.util.Log
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,6 +33,20 @@ import kotlinx.coroutines.flow.asStateFlow
  * lasts tens of milliseconds) and slow enough to avoid the `HIGH_SAMPLING_RATE_SENSORS`
  * permission, which is only required above 200 Hz. The platform is free to deliver slower, and
  * the detector works from the timestamps rather than assuming a rate.
+ *
+ * ### Power
+ *
+ * Sampling at 100 Hz does not require *waking up* at 100 Hz. Events are requested with a
+ * [MAX_REPORT_LATENCY_US] batching window, so a sensor hub with a FIFO -- almost every phone --
+ * collects them in hardware and hands them over a few times a second instead of one at a time.
+ * Every sample keeps its own timestamp, and the detectors work only from timestamps, so detection
+ * is unchanged; an impact is simply recognised up to a quarter of a second later, against a
+ * protection window measured in tens of seconds. Delivery is on a background thread of its own,
+ * not the main thread that also draws the preview and the map.
+ *
+ * And when the platform provides both virtual sensors, the raw accelerometer is not registered at
+ * all: gravity arrives directly, so the raw stream would be a third 100 Hz stream delivered only
+ * to be thrown away.
  */
 class EventSensorSource(context: Context) {
 
@@ -48,10 +64,14 @@ class EventSensorSource(context: Context) {
     private val _available = MutableStateFlow(SensorAvailability())
     val available: StateFlow<SensorAvailability> = _available.asStateFlow()
 
+    // Touched only on the delivery thread while listening, and reset before registering.
     private val gravityEstimate = FloatArray(3)
     private var gravitySeeded = false
     private var latestLinear: FloatArray? = null
+
+    @Volatile
     private var listening = false
+    private var deliveryThread: HandlerThread? = null
 
     val hasGyroscope: Boolean get() = gyroscope != null
     val hasAccelerometer: Boolean get() = accelerometer != null
@@ -71,20 +91,15 @@ class EventSensorSource(context: Context) {
                     emit(event.timestamp)
                 }
 
+                // Only registered when the virtual pair is not in use, so this is the whole signal.
                 Sensor.TYPE_ACCELEROMETER -> {
-                    if (linearAcceleration == null || gravitySensor == null) {
-                        updateDerivedGravity(event.values)
-                        latestLinear = floatArrayOf(
-                            event.values[0] - gravityEstimate[0],
-                            event.values[1] - gravityEstimate[1],
-                            event.values[2] - gravityEstimate[2],
-                        )
-                        emit(event.timestamp)
-                    } else if (!gravitySeeded) {
-                        // Seed the estimate from the first raw reading so the very first samples
-                        // are not dominated by a gravity estimate of zero.
-                        updateDerivedGravity(event.values)
-                    }
+                    updateDerivedGravity(event.values)
+                    latestLinear = floatArrayOf(
+                        event.values[0] - gravityEstimate[0],
+                        event.values[1] - gravityEstimate[1],
+                        event.values[2] - gravityEstimate[2],
+                    )
+                    emit(event.timestamp)
                 }
             }
         }
@@ -95,17 +110,26 @@ class EventSensorSource(context: Context) {
     fun start() {
         val manager = sensorManager ?: return
         if (listening) return
-        var registered = false
-        // Register the virtual sensors when the platform provides them, and always register the
-        // raw accelerometer: it is the fallback and it is what seeds the gravity estimate.
-        linearAcceleration?.let {
-            registered = manager.registerListener(listener, it, SAMPLE_PERIOD_US) || registered
-        }
-        gravitySensor?.let {
-            registered = manager.registerListener(listener, it, SAMPLE_PERIOD_US) || registered
-        }
-        accelerometer?.let {
-            registered = manager.registerListener(listener, it, SAMPLE_PERIOD_US) || registered
+        gravitySeeded = false
+        latestLinear = null
+        val thread = HandlerThread("roadguard-sensors").apply { start() }
+        val handler = Handler(thread.looper)
+        fun register(sensor: Sensor): Boolean =
+            manager.registerListener(listener, sensor, SAMPLE_PERIOD_US, MAX_REPORT_LATENCY_US, handler)
+
+        // Prefer the platform's virtual pair. Both or neither: linear acceleration without the
+        // matching gravity would feed the detector a zero gravity vector for the whole session.
+        val linear = linearAcceleration
+        val gravity = gravitySensor
+        val virtualPair = linear != null && gravity != null && register(linear) &&
+            (register(gravity) || run { manager.unregisterListener(listener, linear); false })
+        // Otherwise derive both from the raw accelerometer, which works with no gyroscope at all.
+        val registered = virtualPair || accelerometer?.let { register(it) } == true
+
+        if (registered) {
+            deliveryThread = thread
+        } else {
+            thread.quitSafely()
         }
         listening = registered
         _available.value = SensorAvailability(
@@ -123,8 +147,10 @@ class EventSensorSource(context: Context) {
         if (!listening) return
         sensorManager?.unregisterListener(listener)
         listening = false
-        gravitySeeded = false
-        latestLinear = null
+        // quitSafely lets an in-flight batch finish on its own thread; the next start() resets
+        // the derived state before anything is registered again.
+        deliveryThread?.quitSafely()
+        deliveryThread = null
         _available.value = _available.value.copy(registered = false)
     }
 
@@ -168,6 +194,16 @@ class EventSensorSource(context: Context) {
          * in impact-shape resolution is a bad trade for a privacy-first app.
          */
         const val SAMPLE_PERIOD_US = 10_000
+
+        /**
+         * How long the sensor hub may hold samples before delivering them: 250 ms.
+         *
+         * Cuts deliveries from one per sample (up to 200 a second across two sensors) to about
+         * four a second on hardware with a FIFO, and changes nothing on hardware without one. The
+         * detectors run on sample timestamps, so the only effect is recognising an impact at most
+         * this much later.
+         */
+        const val MAX_REPORT_LATENCY_US = 250_000
 
         /**
          * Low-pass coefficient for the derived gravity estimate.

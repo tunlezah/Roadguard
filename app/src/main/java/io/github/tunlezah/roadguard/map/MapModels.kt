@@ -1,5 +1,7 @@
 package io.github.tunlezah.roadguard.map
 
+import io.github.tunlezah.roadguard.thermal.MapRenderBudget
+
 /**
  * An offline map package Roadguard can install.
  *
@@ -99,4 +101,20 @@ data class MapWorkBudget(
     val renderEnabled: Boolean = true,
     val positionUpdateIntervalMs: Long = 1_000L,
     val allowAnimation: Boolean = true,
-)
+) {
+    companion object {
+        /**
+         * The map work allowed at [budget].
+         *
+         * `Reduced` keeps the map but moves it once per fix instead of animating: following the
+         * vehicle with a camera animation re-renders the whole map continuously while moving,
+         * which on a single-shader-core GPU is one of the largest draws in the app. `Frozen` and
+         * `Disabled` both take the map off screen, which frees its GL context entirely.
+         */
+        fun forRenderBudget(budget: MapRenderBudget): MapWorkBudget = when (budget) {
+            MapRenderBudget.Full -> MapWorkBudget()
+            MapRenderBudget.Reduced -> MapWorkBudget(renderEnabled = true, positionUpdateIntervalMs = 2_000L, allowAnimation = false)
+            MapRenderBudget.Frozen, MapRenderBudget.Disabled -> MapWorkBudget(renderEnabled = false, allowAnimation = false)
+        }
+    }
+}

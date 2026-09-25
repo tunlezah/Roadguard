@@ -2,6 +2,7 @@ package io.github.tunlezah.roadguard.capability
 
 import com.google.common.truth.Truth.assertThat
 import com.google.common.truth.Truth.assertWithMessage
+import io.github.tunlezah.roadguard.power.PowerPolicy
 import io.github.tunlezah.roadguard.settings.CameraFacing
 import io.github.tunlezah.roadguard.settings.FrameRateSetting
 import io.github.tunlezah.roadguard.settings.QualitySetting
@@ -820,6 +821,128 @@ class RecordingProfileSelectorTest {
         )
 
         assertThat(cosmetic.requiresRebindFrom(baseProfile())).isFalse()
+    }
+
+    @Test
+    fun `the bind key holds exactly what a camera bind depends on`() {
+        val cosmetic = baseProfile().copy(
+            rationale = listOf("another explanation"),
+            tier = DeviceTier.Standard,
+            isAuto = false,
+        )
+        assertThat(cosmetic.bindKey).isEqualTo(baseProfile().bindKey)
+        assertThat(baseProfile().copy(frameRate = 24).bindKey).isNotEqualTo(baseProfile().bindKey)
+        assertThat(baseProfile().copy(burnInOverlays = false).bindKey).isNotEqualTo(baseProfile().bindKey)
+    }
+
+    // ------------------------------------------------------------ battery-safe mode
+
+    private val batterySafe = PowerPolicy.restrain(NORMAL, batterySafe = true)
+
+    @Test
+    fun `battery-safe mode caps a 1080p recording at 720p and says why`() {
+        val profile = selectAt(batterySafe)
+
+        assertThat(profile.cameraXQuality).isEqualTo("HD")
+        assertThat(profile.resolution).isEqualTo(HD)
+        assertRationaleMentions(profile, "Battery-safe mode caps resolution at HD")
+    }
+
+    @Test
+    fun `battery-safe mode caps a hand-picked 4K recording too`() {
+        val profile = selectAt(batterySafe, settings().copy(quality = QualitySetting.Uhd2160p))
+
+        assertThat(profile.cameraXQuality).isEqualTo("HD")
+    }
+
+    @Test
+    fun `battery-safe mode is a ceiling, so a lower resolution is left where it is`() {
+        val baseline = selectAt(batterySafe, tier = DeviceTier.Baseline)
+        assertThat(baseline.cameraXQuality).isEqualTo("HD")
+        assertThat(baseline.rationale.none { it.contains("Battery-safe") }).isTrue()
+
+        val sd = selectAt(batterySafe, settings().copy(quality = QualitySetting.Sd480p))
+        assertThat(sd.cameraXQuality).isEqualTo("SD")
+    }
+
+    @Test
+    fun `battery-safe mode holds a 60 fps request to 30 and sheds the extras`() {
+        val profile = selectAt(
+            batterySafe,
+            settings().copy(frameRate = FrameRateSetting.Fps60, videoStabilisation = TriState.On),
+        )
+
+        assertThat(profile.frameRate).isAtMost(30)
+        assertThat(profile.stabilisation).isFalse()
+        assertThat(profile.dualCamera).isFalse()
+    }
+
+    @Test
+    fun `battery-safe mode keeps the burned-in overlay, because it is evidence`() {
+        assertThat(selectAt(batterySafe).burnInOverlays).isEqualTo(selectAt(NORMAL).burnInOverlays)
+    }
+
+    // --------------------------------------------------------------- safe fallbacks
+
+    @Test
+    fun `a refused rich configuration falls back to 720p30 and then 480p30 with no extras`() {
+        val rich = baseProfile().copy(
+            frameRate = 60,
+            stabilisation = true,
+            targetBitrateBps = 20_000_000,
+            hdr = true,
+            dualCamera = true,
+        )
+
+        val fallbacks = RecordingProfileSelector.safeFallbacks(rich)
+
+        assertThat(fallbacks.map { it.cameraXQuality }).containsExactly("HD", "SD").inOrder()
+        assertThat(fallbacks.map { it.resolution }).containsExactly(HD, SD).inOrder()
+        for (fallback in fallbacks) {
+            assertWithMessage(fallback.label).that(fallback.frameRate).isEqualTo(30)
+            assertWithMessage(fallback.label).that(fallback.stabilisation).isFalse()
+            assertWithMessage(fallback.label).that(fallback.hdr).isFalse()
+            assertWithMessage(fallback.label).that(fallback.dualCamera).isFalse()
+            assertWithMessage(fallback.label).that(fallback.burnInOverlays).isFalse()
+            assertWithMessage(fallback.label).that(fallback.targetBitrateBps).isEqualTo(0)
+            // The encoder was not what the camera refused.
+            assertWithMessage(fallback.label).that(fallback.codecMimeType).isEqualTo(rich.codecMimeType)
+        }
+    }
+
+    @Test
+    fun `a fallback never asks for more than the refused configuration`() {
+        val modest = baseProfile().copy(cameraXQuality = "SD", resolution = SD, frameRate = 24)
+
+        val fallbacks = RecordingProfileSelector.safeFallbacks(modest)
+
+        // 480p at 24 fps is kept; only the overlay effect is shed.
+        assertThat(fallbacks).hasSize(1)
+        assertThat(fallbacks.single().cameraXQuality).isEqualTo("SD")
+        assertThat(fallbacks.single().frameRate).isEqualTo(24)
+        assertThat(fallbacks.single().burnInOverlays).isFalse()
+    }
+
+    @Test
+    fun `the safest configuration has nothing to fall back to`() {
+        val safest = baseProfile().copy(cameraXQuality = "SD", resolution = SD, burnInOverlays = false)
+
+        assertThat(RecordingProfileSelector.safeFallbacks(safest)).isEmpty()
+    }
+
+    @Test
+    fun `every fallback is a different bind from the refused one and from each other`() {
+        val refused = listOf(
+            baseProfile(),
+            baseProfile().copy(cameraXQuality = "HD", resolution = HD),
+            baseProfile().copy(cameraXQuality = "UHD", resolution = UHD, frameRate = 60),
+            baseProfile().copy(cameraXQuality = "SD", resolution = SD),
+        )
+        for (failed in refused) {
+            val keys = RecordingProfileSelector.safeFallbacks(failed).map { it.bindKey }
+            assertWithMessage(failed.label).that(keys).containsNoDuplicates()
+            assertWithMessage(failed.label).that(keys).doesNotContain(failed.bindKey)
+        }
     }
 
     // ------------------------------------------------------- end-to-end coherence

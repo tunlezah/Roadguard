@@ -146,6 +146,13 @@ private fun RecordingStatusChip(state: MainUiState) {
             contentDescription = "Recording is starting",
         )
 
+        RecorderStatus.Recovering -> StatusChip(
+            text = "Reconnecting",
+            iconRes = R.drawable.ic_warning,
+            contentDescription = recording.lastErrorMessage ?: "Recording interrupted, reconnecting",
+            contentColour = status.warning,
+        )
+
         RecorderStatus.Stopping -> StatusChip(
             text = "Stopping",
             iconRes = R.drawable.ic_schedule,
@@ -282,7 +289,9 @@ fun MainControlBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        if (state.recording.isRecording) {
+        // Stop for every state in which a session is running -- including the start-up countdown
+        // and while reconnecting -- because in all of them the user's intent is "recording".
+        if (state.recording.isSessionActive) {
             FilledIconButton(
                 onClick = onStopRecording,
                 colors = IconButtonDefaults.filledIconButtonColors(

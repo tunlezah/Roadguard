@@ -57,8 +57,9 @@ See [`research/android-platform-restrictions.md`](research/android-platform-rest
 The service type keeps the *process* important. Video-only capture (no microphone) still needs a
 `PARTIAL_WAKE_LOCK` or the encode loop can be starved with the screen off.
 
-**Consequence:** `RecordingController` holds one for the duration of a recording, with a 12-hour
-timeout so a bug cannot pin the CPU forever.
+**Consequence:** `RecordingService` holds one from the start of a recording until its last file
+has been finalised, with a 60-minute timeout renewed every 10 minutes so a bug cannot pin the CPU
+for long.
 
 ### 1.6 `Recorder` aborts below 50 MiB free
 

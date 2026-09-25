@@ -125,6 +125,31 @@ class GalleryTripUiTest {
     }
 
     @Test
+    fun `an empty list says where to look for footage that should be there`() {
+        show(GalleryUiState(filter = GalleryFilter.All, days = emptyList(), totalCount = 0))
+
+        compose.onNodeWithText("No recordings yet").assertIsDisplayed()
+        compose.onNodeWithText("Diagnostics", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun `a clip still being recorded says so and cannot be opened`() {
+        val recording = GalleryItem(
+            segment = segment(3, 6).copy(isComplete = false, durationMs = 0L, sizeBytes = 0L),
+            file = File("RG_3.mp4"),
+            event = null,
+            exists = true,
+            timeLabel = "08:18:04",
+            inProgress = true,
+        )
+        val recorded = show(state(trip(expanded = true).copy(items = clips + recording, isRecording = true)))
+
+        compose.onNodeWithText("Still recording", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("08:18:04").performClick()
+        assertThat(recorded.openedSegment).isNull()
+    }
+
+    @Test
     fun `a trip card names the drive and says what it holds`() {
         show(state(trip()))
 

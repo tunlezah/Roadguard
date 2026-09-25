@@ -247,6 +247,9 @@ class TripRepository(
         var deleted = 0
         for (file in storage.trackFiles()) {
             if (file.name in referenced) continue
+            // A track this run just created is not referenced until the trip row is updated a
+            // moment later; it is being written, not orphaned.
+            if (storage.isFromThisProcess(file.name)) continue
             if (file.delete()) deleted++
         }
         deleted

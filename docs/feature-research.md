@@ -31,7 +31,7 @@ of Roadguard's defaults come from**.
 | Pre/post-event protection | 30 s / 60 s by default, configurable |
 | Thermal management | a four-level ladder with its own engine |
 | Storage safety | a reserve the loop cannot spend, and a floor under deletion |
-| Start-up repair | five defined divergence cases, biased toward keeping footage |
+| Start-up repair | ten defined divergence cases, biased toward keeping footage; never empties the index on an empty folder |
 | In-app gallery and player | Media3, with protect/unprotect and share |
 | Trips | clips grouped into drives by a 2-minute gap rule, named from the offline map (suburbs by default, cities between cities) |
 | GPX track per trip | **on by default**; opens in CoMaps or Organic Maps from the gallery, deleted with the trip's last clip |

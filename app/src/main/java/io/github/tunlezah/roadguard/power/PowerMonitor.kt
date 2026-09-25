@@ -42,6 +42,11 @@ class PowerMonitor(private val context: Context) {
 
                 Intent.ACTION_POWER_DISCONNECTED -> _transitions.value =
                     PowerTransition.Disconnected(System.currentTimeMillis())
+
+                // Battery Saver switches battery-safe recording on, so a toggle must be seen at
+                // once rather than at the next battery-level change, which can be many minutes away.
+                PowerManager.ACTION_POWER_SAVE_MODE_CHANGED -> _state.value =
+                    _state.value.copy(isPowerSaveMode = powerManager?.isPowerSaveMode == true)
             }
         }
     }
@@ -52,6 +57,7 @@ class PowerMonitor(private val context: Context) {
             addAction(Intent.ACTION_BATTERY_CHANGED)
             addAction(Intent.ACTION_POWER_CONNECTED)
             addAction(Intent.ACTION_POWER_DISCONNECTED)
+            addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
         }
         runCatching {
             // The sticky battery intent is returned here, giving the current state for free.

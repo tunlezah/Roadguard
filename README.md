@@ -27,7 +27,7 @@ It has no accounts, no cloud, no analytics and no telemetry. Everything stays on
 
 > ### Status: complete and building; **never run on a device**
 >
-> The application is fully implemented, 523 automated tests pass, Android Lint is clean and both
+> The application is fully implemented, 637 automated tests pass, Android Lint is clean and both
 > APKs build and verify. **It has never been installed on a phone or an emulator** — no device was
 > available. So there are no screenshots, no measured benchmarks and no physical thermal
 > validation, and this README does not pretend otherwise. [What is and is not
@@ -47,7 +47,17 @@ It has no accounts, no cloud, no analytics and no telemetry. Everything stays on
 - **Burned-in overlays** — date/time and speed on by default; coordinates and weather available.
 - **Microphone off by default**, and the permission is not requested until you turn it on.
 - **Recording continues with the screen off**, via a camera foreground service and a partial wake
-  lock.
+  lock held until the last clip has been closed.
+- **Recording does not give up.** If another app takes the camera, the encoder fails, frames stop
+  arriving or the memory card goes missing, Roadguard shows *Reconnecting* and keeps retrying —
+  quickly at first, then once a minute — for as long as the session lasts, and resumes the moment
+  the camera is back. Only Stop, your power settings or a nearly flat battery end a recording. A
+  configuration the camera refuses falls back to 720p30 or 480p30 instead of failing.
+- **The last clip is looked after.** Switching the phone off closes the current clip first, and if
+  Android kills the app mid-drive, a notification offers to resume recording with one tap.
+- **Battery-safe mode** when Battery Saver is on, at a low-battery threshold, or on unplugging if
+  you choose: the screen may sleep, the map stops animating, and recording drops to 720p30 without
+  stabilisation. Never while charging, and never in the middle of a clip.
 
 ### Event protection
 - **Multi-stage impact detection**, not a threshold: rolling history, energy and duration
@@ -86,8 +96,11 @@ It has no accounts, no cloud, no analytics and no telemetry. Everything stays on
 - The two newest segments are never deleted, whatever the arithmetic says.
 - Protected footage is never auto-deleted, and video files are **never moved or renamed** — so
   there is no window in which a half-finished move loses the footage an event was protecting.
-- Start-up reconciliation repairs five defined filesystem/index divergences, always biased toward
-  keeping footage: unverifiable files are quarantined, never deleted.
+- Start-up reconciliation repairs ten defined filesystem/index divergences, always biased toward
+  keeping footage: unverifiable files are quarantined, never deleted, and an empty or unreadable
+  recordings folder never empties the index.
+- Each finished clip is flushed to the storage before it is marked complete, so a flat battery
+  moments later cannot leave an unplayable "complete" clip.
 
 ### Offline maps
 - MapLibre rendering a bundled style from a local PMTiles archive. Glyphs and sprites ship inside
@@ -133,7 +146,7 @@ Needs JDK 21 and the Android SDK (platform 37, build tools 37.0.0). Gradle comes
 pinned by version **and SHA-256**.
 
 ```bash
-./gradlew :app:testDebugUnitTest   # 523 tests
+./gradlew :app:testDebugUnitTest   # 637 tests
 ./gradlew :app:lintDebug
 ./gradlew :app:assembleRelease
 ```
@@ -169,7 +182,7 @@ can actually sideload. See [`docs/build.md`](docs/build.md).
 
 | | |
 | --- | --- |
-| Automated tests | **523 pass, 0 fail** — including 77 Compose UI tests that run on the JVM |
+| Automated tests | **637 pass, 0 fail** — including 82 Compose UI tests that run on the JVM |
 | Android Lint | clean, against a baseline of four reviewed categories |
 | Debug APK | builds, `apksigner verify` passes |
 | Release APK | builds (minified, resource-shrunk), `apksigner verify` passes |

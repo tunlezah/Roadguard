@@ -49,6 +49,11 @@ data class GalleryItem(
     val exists: Boolean,
     /** Preformatted start time, so a row never builds a date formatter during composition. */
     val timeLabel: String,
+    /**
+     * The recorder is writing this clip right now. Its file has no index yet, so it cannot be
+     * played, and it must not be described as damaged: it is simply not finished.
+     */
+    val inProgress: Boolean = false,
 ) {
     val isProtected: Boolean get() = segment.isProtected
 }
@@ -202,6 +207,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     event = segment.eventId?.let { eventsById[it] },
                     exists = file.exists(),
                     timeLabel = timeFormat.format(Date(segment.startedAtEpochMs)),
+                    inProgress = !segment.isComplete && storage.isFromThisProcess(segment.fileName),
                 )
             }
             .filter { item ->

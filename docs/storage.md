@@ -91,6 +91,15 @@ until `bytesToFree` is satisfied. Two guards:
 * **`keepNewest = 2`.** The two most recent unprotected segments are never deleted, no matter
   what the arithmetic says. A pathological budget cannot delete the footage recorded seconds
   ago — which, in a crash, is the only footage that matters.
+* **A sidecar outranks the index.** Before deleting a clip, cleanup checks for its
+  `.protected.json` sidecar. If one exists the clip is protected whatever its row says: the row
+  is re-protected and the file kept. That closes the second crash window in §5 for the loop as
+  well as for the reconciler.
+
+Finalising a clip updates only its duration, size, end position and completion flag. It used to
+write back a whole copy of the row read before the clip closed, which could silently undo a
+protection applied to that clip moments earlier — an impact near the end of a segment — and
+leave the footage for the loop to delete.
 
 When protected footage alone exceeds `protectedWarningBytes` (default 2 GB), the user is warned
 that protected files are consuming the volume. Roadguard does not resolve that for them: it is
@@ -121,12 +130,14 @@ design. It also means protection survives total loss of the database.
 
 Roadguard assumes the last run ended badly, because sooner or later it did.
 `StorageReconciler` runs once at start-up, before the recorder can index anything, and repairs
-nine defined divergences:
+ten defined divergences:
 
 | Situation | Cause | Repair |
 | --- | --- | --- |
 | Row marked incomplete | killed mid-recording | inspect the file; index it if playable, quarantine it if not |
-| Row with no file | user deleted it, or the card was swapped | drop the row |
+| Newest finished clip with no index, or an index cut short | power lost before the file reached the disk | quarantine it |
+| File whose index and media are whole but whose metadata cannot be read | the platform's metadata reader failing for a moment | leave it exactly where it is; check it again next start |
+| Row with no file | user deleted it, or the card was swapped | drop the row — only while other recordings are present |
 | File with no row | crash between muxer finalise and index insert | inspect and adopt it |
 | File with a protection sidecar but an unprotected row | crash between marking and indexing | re-apply protection |
 | Event stuck awaiting post-roll | killed just after an impact | close it with whatever footage exists |
@@ -139,8 +150,43 @@ nine defined divergences:
 `quarantine/` and reported — never deleted. The truncated segment may be exactly the one the
 user needs, and a human with a repair tool can do more with it than Roadguard can.
 
+**The index is never emptied on the strength of an empty folder.** Every repair compares the index
+with a directory listing, and that listing is only meaningful when the folder is the one the rows
+were written into and it is readable. A card still mounting after boot, shared storage not yet
+served after unlock, or a volume switched in Settings all produce an empty listing, and the pass
+used to drop every row on it — and with the rows the trips, the tracks and the protection marks —
+for footage that was on the disk the whole time. A folder that cannot be listed now stops the
+pass; a folder holding no earlier recording keeps every row whose file is missing, shown as
+missing in the list and counted in the report, until a start-up that can tell the difference.
+
+**A file's structure decides its fate, not a metadata read.** `Mp4Inspector` walks the top-level
+boxes itself and asks the platform's `MediaMetadataRetriever` only for the duration and
+dimensions of a file that is already whole. A whole file whose metadata that reader cannot return
+is reported as `IndexedButUnread`, which no caller treats as a reason to move or drop anything:
+the reconciler leaves it in place for the next start, the recorder keeps it, and the player
+tries it. An index box whose declared size runs past the end of the file — the power going
+during the last write — is not an index at all, and the file is quarantined as truncated.
+
+**Each step of the pass runs on its own.** A database or file error in one step is noted in the
+report and the remaining steps still run, so nothing can stand between a file the index has lost
+and its re-indexing. A pass that fails outright is shown as such in Diagnostics rather than as
+"not run yet".
+
+**A finished clip is on the medium before its row says so.** The muxer closes a clip without
+syncing it, so its last seconds — and the index at its very end — can sit in the kernel's write
+cache for up to half a minute. A phone that loses power in that window used to be left with a row
+saying "complete" for a file that was not. The recorder now flushes each clip to the storage
+before marking its row, and the reconciler checks the newest finished clips for an index at every
+start, quarantining one that has none. Only the structure is read for that check, so a passing
+metadata failure cannot send a good clip to quarantine.
+
 `ReconcileReport` is surfaced in Diagnostics, so a user who lost power mid-drive can see
 precisely what was repaired.
+
+Reconciliation only ever judges what an *earlier* run left behind. The recorder waits up to ten
+seconds for it before writing anything, and files this process created are skipped regardless: an in-progress
+MP4 has no index yet, so it looks exactly like a truncated one and would otherwise be quarantined
+out from under the recorder.
 
 ## 7. Verifying a file
 
@@ -164,10 +210,14 @@ path of a dashcam would be a worse outcome than saying "this file is damaged, he
 
 | Failure | Behaviour |
 | --- | --- |
-| Card removed mid-recording | the finalise error is classified, the recording stops, and the UI reports the volume is gone. Roadguard does not silently switch volumes — that would scatter a drive's footage across two devices |
-| Volume full despite the reserve | trim, then retry; if the trim frees nothing (all protected), report and stop rather than thrash |
+| Card removed mid-recording | the recorder reports the volume is gone and keeps retrying; recording resumes by itself when the card is back. Roadguard does not silently switch volumes — that would scatter a drive's footage across two devices |
+| Volume full despite the reserve | trim, then retry; if the trim frees nothing (all protected), report it and retry once a minute rather than thrash |
 | Free space below the reserve at start-up | recording does not start; the Storage screen explains what to free |
-| Write error mid-segment | classified by `handleFinalizeError`, segment closed, new segment started, backoff after repeated failures (max 5 consecutive) |
+| Write error mid-segment | classified by `handleFinalizeError`; the file is inspected and kept if playable, and recording is restarted with backoff for as long as the session lasts (`docs/architecture.md` §3.2) |
+| Phone switched off while recording | the shutdown broadcast closes the current file first |
+| Battery flat while recording | recording stops cleanly at 3 % (not charging) and the clip is closed; a phone that dies sooner loses only the clip in progress, which is quarantined. A session cannot be started on a battery already at the floor |
+| Chosen volume not mounted at start | recording refuses with a "storage volume is not available" blocker rather than writing onto another volume, and reconciliation stands down |
+| App killed while recording | the clip in progress is repaired or quarantined on the next start, and a notification offers to resume recording with one tap |
 | Database corrupt or deleted | the reconciler adopts every file it finds and re-applies protection from sidecars. No footage is lost |
 
 ## 9. Storage per hour
