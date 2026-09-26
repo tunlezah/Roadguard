@@ -19,7 +19,7 @@ lines). This document is the shipped design.
 | Tile schema | **Protomaps Basemap** (9 vector layers) |
 | Data | OpenStreetMap, built with planetiler |
 | Source | release assets of `github.com/tunlezah/DashCam`, tag `map-data-v1` |
-| Coverage | whole of Australia (zoom 12), or any single state/territory (zoom 14) |
+| Coverage | whole of Australia (zoom 12) and any number of states/territories (zoom 14), installed side by side |
 | Glyphs and sprites | **bundled in the APK** as assets |
 | Style | **bundled in the APK**, day and night, 18 layers each |
 
@@ -217,8 +217,27 @@ crossing a state border does not watch it blank out. The cost is honest and stat
 better off picking that state. The picker appears during first-run setup and again on the Storage
 screen, and each row says both the size and whether it carries street-level detail.
 
-Switching region **replaces** the installed archive rather than accumulating a second one. That is a
-deliberate choice on a phone where hundreds of megabytes matter, and the Storage screen says so.
+### Several regions at once
+
+Regions accumulate. Installing New South Wales and ACT alongside All of Australia keeps both, and
+nothing removes a map except **Remove** on the Storage screen, which names the region it removes.
+Every package lives in a directory of its own under `maps/`, so installing one never touches
+another's files, and the Storage screen lists what each installed region costs.
+
+Which map is shown is decided by `MapChooser` from each archive's *own* PMTiles header, not from
+the catalogue: the most detailed installed map whose stated coverage contains the vehicle's
+position. A state extract states a bounding box, and boxes overlap a little at the borders, so when
+two equally detailed maps both cover the point the one it lies deepest inside wins — which is the
+state the vehicle is actually in. With no position yet, the whole-country map is used, or whatever
+was already showing.
+
+Switching maps rebuilds the map view and empties its tile cache, so it must not happen on every fix
+near a border. A map that is showing is kept for as long as it covers the vehicle; a more detailed
+one takes over only once the vehicle is about 5 km inside it; leaving a map's coverage switches
+away at once, because a map with no data under the vehicle is worse than a coarse one. Trip place
+names come from the same rule without the hysteresis: the most detailed installed archive covering
+the point. `MapChooserTest` pins every case, and Diagnostics → Offline map lists the installed
+regions and the one in use.
 
 ### Why not self-host
 

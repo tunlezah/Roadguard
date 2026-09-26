@@ -15,7 +15,7 @@
 ./gradlew :app:testDebugUnitTest
 ```
 
-**637 tests. 0 failures. 0 errors. 0 skipped.** About 50 seconds of test execution on a warm
+**654 tests. 0 failures. 0 errors. 0 skipped.** About 50 seconds of test execution on a warm
 build.
 
 | Suite | Tests | What it holds in place |
@@ -51,7 +51,8 @@ build.
 | `TripAssemblerTest` | 10 | The 2-minute gap rule that groups clips into trips and continues a trip after a relaunch, at the boundary, out of order, and with clocks that disagree |
 | `GalleryTripUiTest` | 12 | **Compose UI.** A trip card names the drive and its counts, hides its clips until asked, offers the track buttons only when a track exists, protects a whole trip from its menu, still shows clips no trip has claimed, says where to look when the list is empty, and marks a clip still being recorded as unopenable |
 | `PlaybackProblemsTest` | 6 | What the player says when playback fails: missing, unreadable, damaged, undecodable, each in words a driver can act on |
-| `PmtilesReaderTest` | 9 | PMTiles tile ids per the spec, tile coordinates, and reading tiles through root and leaf directories and run-length entries of a hand-built archive, then decoding its `places` layer |
+| `PmtilesReaderTest` | 11 | PMTiles tile ids per the spec, tile coordinates, the header's stated coverage (and its absence), and reading tiles through root and leaf directories and run-length entries of a hand-built archive, then decoding its `places` layer |
+| `MapChooserTest` | 15 | Which of several installed maps is shown: the most detailed covering the vehicle, the deeper of two overlapping state boxes, no switch for a fix that merely brushes another map's edge, an immediate switch on leaving coverage, and the whole-country map with no position |
 | `GpxWriterTest` | 9 | The track is a valid GPX document before any point and after each one, reopens for appending, renames both `<name>` elements atomically, and reads back thinned for the route thumbnail |
 | `TripNamingTest` | 9 | Suburbs by default, cities between cities, towns alone in the country, loops, unknown ends and the time-based fallback |
 | `TrackPointFilterTest` | 8 | Five-metre movement, the 30 s stationary heartbeat that counts no distance, poor fixes ignored |
@@ -70,14 +71,14 @@ build.
 `PowerPolicy` and `RecoveryPolicy` import **nothing** from `android.*`. They take value types in and return value types
 out.
 
-That is the deliberate architectural choice that makes 464 plain-JVM tests possible without a
+That is the deliberate architectural choice that makes 481 plain-JVM tests possible without a
 device, and it means the questions a dashcam actually gets wrong — *when* does it delete, *when*
 does it reduce quality, *which* segments does an event protect, *is* that spike a collision — are
 all answered by code that is exhaustively exercised on every push.
 
 ## 3. Compose UI tests that run on the JVM
 
-82 of the 637 are real Compose UI tests: they compose the production composables, read the
+82 of the 654 are real Compose UI tests: they compose the production composables, read the
 semantics tree, and perform clicks. They live in `src/test` under Robolectric rather than in
 `src/androidTest`, which is a deliberate trade:
 

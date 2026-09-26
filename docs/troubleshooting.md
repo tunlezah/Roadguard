@@ -341,6 +341,15 @@ with no SIM, no mobile data and no Wi-Fi, forever.
 
 Recording is unaffected by all of these. The recorder has no dependency on the map.
 
+### Which map is shown
+
+Several regions can be installed at once (Storage → Offline maps). Roadguard shows the most
+detailed one whose coverage contains your position, and All of Australia elsewhere; a state map
+takes over once you are a few kilometres inside its coverage and hands back the moment you leave
+it. Coverage is the archive's own bounding box, so right at a state border the street-level map
+may show little until you are properly across. Diagnostics → Offline map lists the installed
+regions and the one in use.
+
 ### The map is frozen or gone
 
 Deliberate, at thermal level `High` and `Critical`: the map is taken off screen, which frees its

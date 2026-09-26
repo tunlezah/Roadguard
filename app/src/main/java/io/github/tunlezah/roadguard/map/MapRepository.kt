@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
+import io.github.tunlezah.roadguard.location.LocationState
 import io.github.tunlezah.roadguard.storage.StorageBudget
 import io.github.tunlezah.roadguard.storage.StorageManager
 import kotlinx.coroutines.CoroutineScope
@@ -12,6 +13,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -38,15 +44,49 @@ import java.io.File
  * The repository runs on the application scope, checks the storage budget before it starts (using
  * the same reserve the recorder respects, so a map download can never eat the recording headroom),
  * and exposes a [MapWorkBudget] the thermal engine can throttle to nothing.
+ *
+ * ### Several maps at once
+ *
+ * Every package installs into a directory of its own and nothing removes one except the user.
+ * [installed] lists what is on disk, described by each archive's own header, and [activeMap] is
+ * the one to show and to name places from: the most detailed map covering the vehicle's position,
+ * chosen by [MapChooser] as fixes arrive. [selectedPackage] and [installState] are about the
+ * package the *user is looking at* on the storage or first-run screen -- the one a download or a
+ * removal applies to -- and say nothing about what the map pane is showing.
  */
 class MapRepository(
     private val context: Context,
     private val scope: CoroutineScope,
     private val storage: StorageManager,
     private val downloader: MapDownloader = MapDownloader(),
+    /** The vehicle's position, which decides the active map. Null means no position ever. */
+    location: StateFlow<LocationState>? = null,
 ) {
     private val _installState = MutableStateFlow<MapInstallState>(MapInstallState.NotInstalled)
     val installState: StateFlow<MapInstallState> = _installState.asStateFlow()
+
+    private val _installed = MutableStateFlow<List<InstalledMap>>(emptyList())
+
+    /** Every package installed and readable on the current storage volume. */
+    val installed: StateFlow<List<InstalledMap>> = _installed.asStateFlow()
+
+    private val _activeMap = MutableStateFlow<InstalledMap?>(null)
+
+    /** The map to render and to name places from, or null when none is installed. */
+    val activeMap: StateFlow<InstalledMap?> = _activeMap.asStateFlow()
+
+    init {
+        val positions = location
+            ?.map { it.latitude to it.longitude }
+            ?.distinctUntilChanged()
+            ?: flowOf(null to null)
+        scope.launch {
+            combine(_installed, positions) { maps, position -> maps to position }
+                .collect { (maps, position) ->
+                    _activeMap.update { current -> MapChooser.choose(maps, position.first, position.second, current) }
+                }
+        }
+    }
 
     private val _workBudget = MutableStateFlow(MapWorkBudget())
     val workBudget: StateFlow<MapWorkBudget> = _workBudget.asStateFlow()
@@ -59,12 +99,11 @@ class MapRepository(
         private set
 
     /**
-     * Chooses which region to install.
+     * Chooses which package the storage and first-run screens are working with.
      *
-     * Only meaningful before or between installs: switching region while a download is running
-     * would leave a half-downloaded file for a package nobody selected, so an active download is
-     * cancelled first. Any *installed* archive for the previous region is left alone — the caller
-     * decides whether to remove it, because on a phone the user may well want to keep both.
+     * Only meaningful before or between installs: switching while a download is running would
+     * leave a half-downloaded file for a package nobody selected, so an active download is
+     * cancelled first. Anything already installed is left exactly as it is.
      *
      * @return true when the selection changed.
      */
@@ -101,10 +140,16 @@ class MapRepository(
             }
             _installState.value = readInstalledState(chosen) ?: MapInstallState.NotInstalled
         }
+        refreshInstalled()
     }
 
-    /** True when a usable offline map is present. The map pane renders only when this holds. */
-    fun isInstalled(): Boolean = _installState.value is MapInstallState.Installed
+    /** Re-reads which packages are installed. File I/O, so it runs off the caller's thread. */
+    fun refreshInstalled() {
+        scope.launch { _installed.value = withContext(Dispatchers.IO) { scanInstalled() } }
+    }
+
+    /** True when at least one usable offline map is present. */
+    fun isInstalled(): Boolean = _installed.value.isNotEmpty()
 
     fun setWorkBudget(budget: MapWorkBudget) {
         _workBudget.value = budget
@@ -140,15 +185,23 @@ class MapRepository(
         }
     }
 
-    /** Removes the installed map and any partial download, freeing its storage. */
-    suspend fun uninstall() = withContext(Dispatchers.IO) {
-        installJob?.cancel()
-        val chosen = selectedPackage ?: return@withContext
-        val directory = directoryFor(chosen)
-        directory.deleteRecursively()
-        downloader.discardPartial(archiveFor(chosen))
-        archiveFor(chosen).delete()
-        _installState.value = MapInstallState.NotInstalled
+    /** Removes the selected package's map and any partial download of it. */
+    suspend fun uninstall() {
+        selectedPackage?.let { uninstall(it) }
+    }
+
+    /** Removes one package's map and any partial download of it, leaving every other map alone. */
+    suspend fun uninstall(pack: MapPackage) = withContext(Dispatchers.IO) {
+        val isSelected = selectedPackage?.id == pack.id
+        if (isSelected) {
+            installJob?.cancel()
+            installJob = null
+        }
+        directoryFor(pack).deleteRecursively()
+        downloader.discardPartial(archiveFor(pack))
+        archiveFor(pack).delete()
+        if (isSelected) _installState.value = MapInstallState.NotInstalled
+        _installed.value = scanInstalled()
     }
 
     private suspend fun runInstall(chosen: MapPackage) {
@@ -213,6 +266,29 @@ class MapRepository(
             MapInstaller.install(part, archive, directoryFor(chosen), chosen)
         }
         _installState.value = installed
+        _installed.value = withContext(Dispatchers.IO) { scanInstalled() }
+    }
+
+    /**
+     * What is installed, from the disk. A package counts when its marker is present and its
+     * archive can be found; the zoom and coverage are read from the archive's own header, with the
+     * catalogue's figure as the fallback for an archive that is not PMTiles.
+     */
+    private fun scanInstalled(): List<InstalledMap> = packages.mapNotNull { pack ->
+        val directory = directoryFor(pack)
+        val marker = MapInstaller.markerFile(directory)
+        if (!marker.exists()) return@mapNotNull null
+        val archive = MapStyleProvider.findArchiveIn(directory) ?: return@mapNotNull null
+        val header = runCatching { PmtilesReader.open(archive)?.use { it.header } }.getOrNull()
+        InstalledMap(
+            pack = pack,
+            directory = directory,
+            archive = archive,
+            sizeBytes = directory.walkTopDown().filter { it.isFile }.sumOf { it.length() },
+            installedAtEpochMs = marker.lastModified(),
+            maxZoom = header?.maxZoom ?: pack.maxZoom ?: 0,
+            bounds = header?.bounds,
+        )
     }
 
     private fun readInstalledState(chosen: MapPackage): MapInstallState? {

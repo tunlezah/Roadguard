@@ -596,12 +596,13 @@ private fun VolumeSection(volumes: List<StorageVolumeOption>, onChooseVolume: (S
 // ── Offline map ────────────────────────────────────────────────────────────────────────
 
 /**
- * The offline map: which region, how big, and where it is up to.
+ * The offline maps: which regions are installed, how big each is, and where a download is up to.
  *
  * This lives on the Storage screen rather than in Settings because the only thing about it a user
- * ever needs to reconsider is how much of the phone it is occupying. Switching region replaces the
- * installed archive rather than accumulating a second one -- stated on screen, because several
- * hundred megabytes quietly retained is precisely what this screen exists to prevent.
+ * ever needs to reconsider is how much of the phone it is occupying. Regions accumulate on
+ * purpose -- the whole country alongside a street-level state, with the map pane choosing by
+ * position -- and each installed one says what it costs, so giving the space back is one tap and
+ * never a surprise.
  */
 @Composable
 private fun OfflineMapSection(
@@ -614,7 +615,9 @@ private fun OfflineMapSection(
     val install = state.mapInstall
     val busy = install is MapInstallState.Downloading || install is MapInstallState.Verifying
 
-    StorageSection(title = "Offline map") {
+    val installedById = state.installedMaps.associateBy { it.id }
+
+    StorageSection(title = "Offline maps") {
         Text(
             text = mapInstallDescription(install),
             style = MaterialTheme.typography.bodyMedium,
@@ -649,11 +652,17 @@ private fun OfflineMapSection(
         }
 
         state.mapPackages.forEach { pack ->
+            val installedMap = installedById[pack.id]
             ChoiceRow(
                 selected = pack.id == state.mapPackage?.id,
                 title = pack.displayName,
                 supporting = buildString {
-                    pack.sizeBytes?.let { append("${it / (1024 * 1024)} MB download") }
+                    if (installedMap != null) {
+                        append("Installed, ${installedMap.sizeBytes / (1024 * 1024)} MB")
+                        if (pack.id == state.activeMapId) append(" · showing now")
+                    } else {
+                        pack.sizeBytes?.let { append("${it / (1024 * 1024)} MB download") }
+                    }
                     if (isNotEmpty()) append(" · ")
                     append(if (pack.isStreetLevel) "street level" else "main roads only")
                 },
@@ -673,8 +682,10 @@ private fun OfflineMapSection(
         }
 
         Notice(
-            text = "Downloaded once, then the map works with no SIM, no mobile data and no Wi-Fi. " +
-                "Choosing a different region replaces the installed one rather than keeping both.",
+            text = "Downloaded once, then the maps work with no SIM, no mobile data and no Wi-Fi. " +
+                "Keep as many regions as you like: Roadguard shows the most detailed one that covers " +
+                "where you are, and All of Australia everywhere else. Choose a region and tap Remove " +
+                "to give its space back.",
             iconRes = R.drawable.ic_help_outline,
             container = MaterialTheme.colorScheme.surfaceContainerHigh,
             content = MaterialTheme.colorScheme.onSurface,

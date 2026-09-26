@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.CreationExtras
 import io.github.tunlezah.roadguard.core.RoadguardContainer
 import io.github.tunlezah.roadguard.data.SegmentEntity
+import io.github.tunlezah.roadguard.map.InstalledMap
 import io.github.tunlezah.roadguard.map.MapInstallState
 import io.github.tunlezah.roadguard.map.MapPackage
 import io.github.tunlezah.roadguard.settings.LoopBudget
@@ -74,6 +75,10 @@ class StorageViewModel(application: Application) : AndroidViewModel(application)
             mapPackages = container.mapRepository.packages,
             mapPackage = container.mapRepository.selectedPackage,
         )
+    }.combine(container.mapRepository.installed) { snapshot, maps ->
+        snapshot.copy(installedMaps = maps)
+    }.combine(container.mapRepository.activeMap) { snapshot, active ->
+        snapshot.copy(activeMapId = active?.id)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS),
@@ -184,26 +189,24 @@ class StorageViewModel(application: Application) : AndroidViewModel(application)
     fun pauseMapInstall() = container.mapRepository.pause()
 
     /**
-     * Switches region, and remembers the choice.
+     * Chooses the region the Download and Remove buttons apply to, and remembers the choice.
      *
-     * The previously installed archive is removed, because the alternative -- keeping several
-     * hundred megabytes of a map the user has just replaced -- is exactly the kind of silent
-     * storage consumption the rest of this screen exists to prevent.
+     * Nothing installed is touched: maps accumulate on purpose, so the whole country can sit
+     * alongside a street-level state, and the map pane shows whichever covers the vehicle best.
+     * Space is given back only by an explicit Remove.
      */
     fun selectMapPackage(pack: MapPackage) = viewModelScope.launch {
-        val previous = container.mapRepository.selectedPackage
-        if (previous != null && previous.id != pack.id) {
-            container.mapRepository.uninstall()
-        }
         if (!container.mapRepository.select(pack)) return@launch
         container.settingsRepository.update { it.copy(mapPackageId = pack.id) }
         remeasure()
     }
 
+    /** Removes the selected region's map, and nothing else. */
     fun removeMap() = viewModelScope.launch {
+        val removed = container.mapRepository.selectedPackage
         container.mapRepository.uninstall()
         remeasure()
-        post(StorageAction.Message("Offline map removed"))
+        post(StorageAction.Message(removed?.let { "${it.displayName} map removed" } ?: "Map removed"))
     }
 
     fun clearAction() = measured.update { it.copy(action = null) }
@@ -273,6 +276,10 @@ data class StorageUiState(
     val mapBytes: Long = 0L,
     val mapPackages: List<MapPackage> = emptyList(),
     val mapPackage: MapPackage? = null,
+    /** Every region installed on the volume, whatever is selected. */
+    val installedMaps: List<InstalledMap> = emptyList(),
+    /** The region the map pane is showing right now, or null. */
+    val activeMapId: String? = null,
     val volumes: List<StorageVolumeOption> = emptyList(),
     val quarantineFileCount: Int = 0,
     val quarantineBytes: Long = 0L,

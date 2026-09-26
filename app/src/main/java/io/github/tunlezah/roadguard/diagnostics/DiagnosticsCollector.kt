@@ -543,8 +543,19 @@ class DiagnosticsCollector(
                     },
                     severity = if (install is MapInstallState.Failed) EntrySeverity.Warning else EntrySeverity.Normal,
                 ),
-                DiagnosticsEntry("Package", mapRepository.selectedPackage?.displayName ?: "none"),
-                DiagnosticsEntry("Data attribution", mapRepository.selectedPackage?.attribution ?: "n/a"),
+                DiagnosticsEntry("Selected package", mapRepository.selectedPackage?.displayName ?: "none"),
+                DiagnosticsEntry(
+                    "Installed maps",
+                    mapRepository.installed.value
+                        .joinToString { "${it.pack.displayName} (zoom ${it.maxZoom}, ${mib(it.sizeBytes)})" }
+                        .ifEmpty { "none" },
+                    Provenance.Measured,
+                ),
+                DiagnosticsEntry("Map in use", mapRepository.activeMap.value?.pack?.displayName ?: "none"),
+                DiagnosticsEntry(
+                    "Data attribution",
+                    mapRepository.installed.value.map { it.pack.attribution }.distinct().joinToString().ifEmpty { "n/a" },
+                ),
                 DiagnosticsEntry("Map storage", mib(storageManager.mapBytes()), Provenance.Measured),
                 DiagnosticsEntry(
                     "Render budget",

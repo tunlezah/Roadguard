@@ -185,7 +185,7 @@ class RoadguardContainer(private val appContext: Context) {
     }
 
     val mapRepository: MapRepository by lazy {
-        MapRepository(appContext, applicationScope, storageManager)
+        MapRepository(appContext, applicationScope, storageManager, location = locationEngine.state)
     }
 
     /**
