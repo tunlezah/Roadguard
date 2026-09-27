@@ -257,4 +257,12 @@ class GalleryTripUiTest {
 
         compose.onNodeWithText("No recordings yet").assertIsDisplayed()
     }
+
+    @Test
+    fun `a list still being read says so rather than claiming there are no recordings`() {
+        show(GalleryUiState(loaded = false))
+
+        compose.onNodeWithText("Loading recordings…").assertIsDisplayed()
+        compose.onNodeWithText("No recordings yet").assertDoesNotExist()
+    }
 }

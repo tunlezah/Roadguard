@@ -205,6 +205,9 @@ fun PlayerScreen(
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             when {
+                // The list is still being read: "no longer in the index" would be untrue.
+                item == null && !state.loaded -> Message("Loading…", Modifier.fillMaxSize())
+
                 item == null -> Message(
                     "That recording is no longer in the index.",
                     Modifier.fillMaxSize(),

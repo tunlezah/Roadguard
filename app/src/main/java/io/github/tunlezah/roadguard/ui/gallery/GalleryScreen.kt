@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -170,7 +171,9 @@ fun GalleryContent(
                 }
             }
 
-            if (state.days.isEmpty()) {
+            if (!state.loaded) {
+                Loading(modifier = Modifier.fillMaxSize())
+            } else if (state.days.isEmpty()) {
                 EmptyState(
                     filter = state.filter,
                     totalCount = state.totalCount,
@@ -663,6 +666,23 @@ private fun SegmentRow(
                 )
             }
         }
+    }
+}
+
+/** Shown until the index has been read once, so an unread list is never mistaken for an empty one. */
+@Composable
+private fun Loading(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.padding(32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        CircularProgressIndicator()
+        Text(
+            text = "Loading recordings…",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

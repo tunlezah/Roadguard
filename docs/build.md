@@ -118,7 +118,7 @@ export ROADGUARD_KEY_PASSWORD=…
 ### When no key is supplied
 
 `assembleRelease` **falls back to the Android debug key** and stamps the version name
-`1.0.0-unsigned-release`. This is deliberate: CI must produce an APK you can actually sideload,
+`1.1.0-unsigned-release`. This is deliberate: CI must produce an APK you can actually sideload,
 and a build that silently emits an unsigned, uninstallable APK is worse than one that says what
 it did.
 
