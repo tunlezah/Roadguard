@@ -218,6 +218,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
         val itemsByTrip = items.groupBy { it.segment.tripId }
+        val knownTripIds = index.trips.mapTo(HashSet()) { it.id }
 
         // A card per trip that still has clips under the current filter, newest trip first.
         val cards = index.trips.mapNotNull { trip ->
@@ -226,11 +227,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
         val dayOf: (Long) -> String = { epochMs -> dayFormat.format(Date(epochMs)) }
         val cardsByDay = cards.groupBy { dayOf(it.trip!!.startedAtEpochMs) }
-        val looseByDay = itemsByTrip[null].orEmpty()
+        // A clip with no trip -- or one whose trip row has gone missing -- goes under a card of its
+        // own rather than being dropped. Dropping a clip whose tripId points at a trip that no
+        // longer exists is exactly how a recordings folder full of footage shows as an empty list,
+        // and it breaks the promise in SegmentEntity.tripId that such a clip is still shown.
+        val looseItems = items.filter { isLoose(it.segment.tripId, knownTripIds) }
+        val looseByDay = looseItems
             .groupBy { dayOf(it.segment.startedAtEpochMs) }
             .mapValues { (label, loose) -> looseCard(label, loose.sortedBy { it.segment.startedAtEpochMs }) }
 
-        val dayOrder = (cards.map { it.trip!!.startedAtEpochMs } + itemsByTrip[null].orEmpty().map { it.segment.startedAtEpochMs })
+        val dayOrder = (cards.map { it.trip!!.startedAtEpochMs } + looseItems.map { it.segment.startedAtEpochMs })
             .sortedDescending()
             .map(dayOf)
             .distinct()
@@ -426,6 +432,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         /** Points in a route thumbnail. Enough for the shape, few enough to draw per frame. */
         const val SKETCH_POINTS = 48
         private const val SKETCH_CACHE_LIMIT = 500
+
+        /**
+         * Whether a clip belongs under the "not in a trip" card rather than a trip's card.
+         *
+         * True for a clip with no trip, and -- the case that matters -- for one whose [tripId]
+         * points at a trip row that no longer exists. Such a clip must still be listed: footage on
+         * disk is never hidden because its trip label went missing. Pure, so this is unit tested.
+         */
+        fun isLoose(tripId: Long?, knownTripIds: Set<Long>): Boolean =
+            tripId == null || tripId !in knownTripIds
 
         val Factory: ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")

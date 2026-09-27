@@ -262,6 +262,44 @@ class StorageReconcilerTest {
         assertThat(File(storage.layout.quarantine, "RG_lost.mp4").exists()).isTrue()
     }
 
+    // ── Orphaned clips are recovered, not hidden ──────────────────────────────────────────
+
+    @Test
+    fun `a clip whose trip row is missing is re-homed into a real trip`() = runTest {
+        // A clip pointing at trip 999, which does not exist. The gallery groups by trip, so an
+        // orphan like this appears under no trip; and reassembly only ever looks at clips with no
+        // trip, so it would stay orphaned for good. Reconciliation must detach and regroup it.
+        writePlayable("RG_1.mp4")
+        insert(row("RG_1.mp4", complete = true, startedAt = 1_000L).copy(tripId = 999L))
+
+        val report = reconciler.reconcile()
+
+        assertWithMessage(report.toString()).that(report.orphansRehomed).isEqualTo(1)
+        val segment = database.segments().byFileName("RG_1.mp4")!!
+        assertWithMessage("the clip should now belong to a trip").that(segment.tripId).isNotNull()
+        assertWithMessage("and that trip must actually exist")
+            .that(database.trips().byId(segment.tripId!!)).isNotNull()
+        assertThat(report.summary()).contains("missing trip")
+    }
+
+    @Test
+    fun `a clip with a valid trip is left on that trip`() = runTest {
+        writePlayable("RG_1.mp4")
+        val tripId = database.trips().insert(
+            io.github.tunlezah.roadguard.data.TripEntity(
+                startedAtEpochMs = 500L,
+                endedAtEpochMs = 500L,
+                state = io.github.tunlezah.roadguard.data.TripState.Closed.name,
+            ),
+        )
+        insert(row("RG_1.mp4", complete = true, startedAt = 1_000L).copy(tripId = tripId))
+
+        val report = reconciler.reconcile()
+
+        assertWithMessage(report.toString()).that(report.orphansRehomed).isEqualTo(0)
+        assertThat(database.segments().byFileName("RG_1.mp4")!!.tripId).isEqualTo(tripId)
+    }
+
     // ── Fixtures ────────────────────────────────────────────────────────────────────────
 
     private suspend fun insert(segment: SegmentEntity): Long = database.segments().insert(segment)

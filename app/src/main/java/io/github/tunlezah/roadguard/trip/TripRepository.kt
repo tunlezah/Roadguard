@@ -167,6 +167,20 @@ class TripRepository(
     // ── Start-up reconciliation ───────────────────────────────────────────────────────────────
 
     /**
+     * Detaches clips whose trip row has gone missing, so [assignUnassigned] can regroup them.
+     *
+     * The gallery groups clips by trip and shows a clip whose trip is missing under a loose card,
+     * but that clip would otherwise stay orphaned forever, because reassembly only ever looks at
+     * clips with no trip. Running this first turns an orphan back into an unassigned clip, which the
+     * next step gives a real trip. Returns how many clips were detached.
+     */
+    suspend fun rehomeOrphaned(): Int = withContext(Dispatchers.IO) {
+        segments.clearMissingTripRefs().also {
+            if (it > 0) Log.w(TAG, "re-homed $it clip(s) whose trip row was missing")
+        }
+    }
+
+    /**
      * Groups clips that have no trip -- recorded before trips existed, or adopted from disk -- into
      * trips by the gap rule, and returns how many clips were assigned.
      *
