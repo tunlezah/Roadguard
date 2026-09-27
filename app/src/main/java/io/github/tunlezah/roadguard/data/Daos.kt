@@ -104,6 +104,17 @@ interface SegmentDao {
     @Query("UPDATE segments SET tripId = :tripId WHERE id IN (:ids)")
     suspend fun assignTrip(ids: List<Long>, tripId: Long)
 
+    /**
+     * Detaches clips whose trip row has gone, by nulling a [tripId] that matches no trip.
+     *
+     * A clip in this state is an orphan: the gallery groups by trip, and start-up reassembly only
+     * looks at clips with a null trip, so without this an orphaned clip is never regrouped. Nulling
+     * it makes it "unassigned" again, so the next reassembly gives it a real trip. Returns the
+     * number of clips detached.
+     */
+    @Query("UPDATE segments SET tripId = NULL WHERE tripId IS NOT NULL AND tripId NOT IN (SELECT id FROM trips)")
+    suspend fun clearMissingTripRefs(): Int
+
     @Query("UPDATE segments SET endLatitude = :latitude, endLongitude = :longitude WHERE id = :id")
     suspend fun setEndLocation(id: Long, latitude: Double?, longitude: Double?)
 
