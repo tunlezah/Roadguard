@@ -52,6 +52,7 @@ import io.github.tunlezah.roadguard.settings.CameraFacing
 import io.github.tunlezah.roadguard.settings.Settings
 import io.github.tunlezah.roadguard.settings.SettingsRepository
 import io.github.tunlezah.roadguard.storage.Mp4Inspector
+import io.github.tunlezah.roadguard.storage.Mp4Verdict
 import io.github.tunlezah.roadguard.storage.StorageAssessment
 import io.github.tunlezah.roadguard.storage.StorageBucket
 import io.github.tunlezah.roadguard.storage.StorageManager
@@ -823,37 +824,38 @@ class RecordingController(
         val audio = settings.microphoneEnabled && hasMicrophonePermission()
         val tripId = activeTripId
         val profile = boundProfile ?: run {
+            storage.finishedWriting(file.name)
             scheduleRecovery(token, RecordingFailure.StartRejected)
             return false
         }
         val location = locationEngine.state.value
+        val row = SegmentEntity(
+            fileName = file.name,
+            bucket = StorageBucket.Recordings.dirName,
+            startedAtEpochMs = startedAt,
+            durationMs = 0,
+            sizeBytes = 0,
+            widthPx = profile.resolution?.width ?: 0,
+            heightPx = profile.resolution?.height ?: 0,
+            rotationDegrees = CameraOrientationTracker.degreesFor(rotation),
+            codec = profile.codecMimeType,
+            bitrateBps = profile.targetBitrateBps,
+            frameRate = profile.frameRate,
+            hasAudio = audio,
+            cameraFacing = settings.cameraFacing.name,
+            profileLabel = profile.label,
+            isComplete = false,
+            startLatitude = location.latitude,
+            startLongitude = location.longitude,
+            tripId = tripId,
+        )
         val segmentId = withContext(Dispatchers.IO) {
             runCatching {
-                segments.insert(
-                    SegmentEntity(
-                        fileName = file.name,
-                        bucket = StorageBucket.Recordings.dirName,
-                        startedAtEpochMs = startedAt,
-                        durationMs = 0,
-                        sizeBytes = 0,
-                        widthPx = profile.resolution?.width ?: 0,
-                        heightPx = profile.resolution?.height ?: 0,
-                        rotationDegrees = CameraOrientationTracker.degreesFor(rotation),
-                        codec = profile.codecMimeType,
-                        bitrateBps = profile.targetBitrateBps,
-                        frameRate = profile.frameRate,
-                        hasAudio = audio,
-                        cameraFacing = settings.cameraFacing.name,
-                        profileLabel = profile.label,
-                        isComplete = false,
-                        startLatitude = location.latitude,
-                        startLongitude = location.longitude,
-                        tripId = tripId,
-                    ),
-                )
+                segments.insert(row)
             }.onFailure {
-                // Recording matters more than its index: start-up reconciliation adopts a playable
-                // file with no row, so the footage is recovered on the next launch.
+                // Recording matters more than its index. The insert is tried again when the clip
+                // finalises (indexLate), and start-up reconciliation adopts any file still left
+                // without a row.
                 Log.w(TAG, "could not index segment $index", it)
             }.getOrNull()
         }
@@ -863,6 +865,7 @@ class RecordingController(
         withContext(Dispatchers.Main) { cameraSession.updateVideoRotation(rotation) }
         if (!isCurrent(token)) {
             segmentId?.let(::dropRow)
+            storage.finishedWriting(file.name)
             return false
         }
 
@@ -882,6 +885,7 @@ class RecordingController(
             token = token,
             index = index,
             segmentId = segmentId,
+            row = row,
             startedAtEpochMs = startedAt,
             file = file,
             tripId = tripId,
@@ -903,6 +907,7 @@ class RecordingController(
             // The row was indexed for a file that will now never be written; without this it
             // sits in the gallery forever as a missing file.
             segmentId?.let(::dropRow)
+            storage.finishedWriting(file.name)
             scheduleRecovery(token, RecordingFailure.StartRejected)
             return false
         }
@@ -1065,6 +1070,7 @@ class RecordingController(
         // "recording" with nothing recording.
         val durationMs = event.recordingStats.recordedDurationNanos / 1_000_000
         val kept = runCatchingNonCancellation { indexFinalisedSegment(handle, event, durationMs) } ?: false
+        storage.finishedWriting(handle.file.name)
         // Only now does the clip stop holding the wake lock: it is on the disk and in the index.
         publishUnfinalized()
         update {
@@ -1126,7 +1132,12 @@ class RecordingController(
         // included, in the write cache, and a flat battery within the next half minute would
         // otherwise take it. See StorageManager.flushToDisk.
         if (usable) storage.flushToDisk(file)
-        val segmentId = handle.segmentId ?: return@withContext usable
+        // The row normally exists from the moment the segment started. If that insert failed, a
+        // playable clip is indexed now, rather than staying invisible in the gallery until the next
+        // start-up happens to adopt it -- which, for a phone left recording for days, is never.
+        val segmentId = handle.segmentId
+            ?: (if (usable) indexLate(handle) else null)
+            ?: return@withContext usable
         if (usable) {
             val location = locationEngine.state.value
             segments.markComplete(
@@ -1153,6 +1164,48 @@ class RecordingController(
             segments.deleteById(segmentId)
             false
         }
+    }
+
+    /** Inserts the row a segment should have had since it started. Null when that fails again. */
+    private suspend fun indexLate(handle: SegmentHandle): Long? = runCatching {
+        segments.byFileName(handle.file.name)?.id ?: segments.insert(handle.row)
+    }.onSuccess { id ->
+        handle.segmentId = id
+        Log.i(TAG, "indexed segment ${handle.index} at finalise; its first insert had failed")
+    }.onFailure { Log.w(TAG, "could not index segment ${handle.index}", it) }.getOrNull()
+
+    /**
+     * Makes what an abandoned recording left behind playable in this session, when it can be.
+     *
+     * A recording whose Finalize never came still usually has a whole file on the disk: CameraX
+     * writes the index as it closes, and it is the event that went missing, not the file. Before
+     * this, such a clip stayed "incomplete" -- listed as still being recorded, refused by the
+     * player, never counted against the loop's budget and never deleted by it -- until the app
+     * next started, which on a dashcam phone left running can be days away. A structurally whole
+     * file is marked complete now. Anything else is left exactly as it is for start-up
+     * reconciliation, which runs when nothing can still be writing to it.
+     */
+    private suspend fun salvageAbandoned(handle: SegmentHandle) = withContext(Dispatchers.IO) {
+        val file = handle.file
+        val verdict = Mp4Inspector.inspect(file)
+        if (!verdict.isUsable) {
+            Log.w(TAG, "abandoned segment ${handle.index} is ${verdict.summary}; left for start-up repair")
+            return@withContext
+        }
+        val segmentId = handle.segmentId ?: indexLate(handle) ?: return@withContext
+        val durationMs = (verdict as? Mp4Verdict.Playable)?.metadata?.durationMs ?: handle.recordedMs
+        storage.flushToDisk(file)
+        segments.markComplete(
+            id = segmentId,
+            durationMs = durationMs,
+            sizeBytes = file.length(),
+            endLatitude = null,
+            endLongitude = null,
+        )
+        (handle.tripId ?: activeTripId)?.let { tripId ->
+            runCatching { trips.onSegmentFinalised(tripId, handle.startedAtEpochMs + durationMs, locationEngine.state.value) }
+        }
+        Log.i(TAG, "abandoned segment ${handle.index} was whole; indexed it as complete")
     }
 
     /** Classifies a finalise error on the active recording. Caller holds [stateMutex]. */
@@ -1313,6 +1366,10 @@ class RecordingController(
         Log.w(TAG, "${abandoned.size} recording(s) never finalised; no longer waiting for them")
         liveSegments.removeAll(abandoned.toSet())
         publishUnfinalized()
+        for (handle in abandoned) {
+            storage.finishedWriting(handle.file.name)
+            scope.launch { runCatchingNonCancellation { salvageAbandoned(handle) } }
+        }
     }
 
     /**
@@ -1788,13 +1845,19 @@ class RecordingController(
     private class SegmentHandle(
         val token: Long,
         val index: Long,
-        val segmentId: Long?,
+        segmentId: Long?,
+        /** The row as it was first inserted, kept so a failed insert can be retried at finalise. */
+        val row: SegmentEntity,
         val startedAtEpochMs: Long,
         val file: File,
         val tripId: Long?,
         val targetMs: Long,
         startedAtElapsedMs: Long,
     ) {
+        /** The index row, or null while indexing has failed; set late by [indexLate]. */
+        @Volatile
+        var segmentId: Long? = segmentId
+
         /** Completed on the recorder's thread when the file has been finalised. */
         val finalized = CompletableDeferred<Unit>()
 

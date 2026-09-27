@@ -28,7 +28,7 @@ It has no accounts, no cloud, no analytics and no telemetry. Everything stays on
 > ### Status: complete and building; **never run on a device**
 >
 > The application is fully implemented, 654 automated tests pass, Android Lint is clean and both
-> The application is fully implemented, 642 automated tests pass, Android Lint is clean and both
+> The application is fully implemented, 664 automated tests pass, Android Lint is clean and both
 > APKs build and verify. **It has never been installed on a phone or an emulator** — no device was
 > available. So there are no screenshots, no measured benchmarks and no physical thermal
 > validation, and this README does not pretend otherwise. [What is and is not
@@ -149,7 +149,7 @@ Needs JDK 21 and the Android SDK (platform 37, build tools 37.0.0). Gradle comes
 pinned by version **and SHA-256**.
 
 ```bash
-./gradlew :app:testDebugUnitTest   # 642 tests
+./gradlew :app:testDebugUnitTest   # 664 tests
 ./gradlew :app:lintDebug
 ./gradlew :app:assembleRelease
 ```
@@ -185,8 +185,8 @@ can actually sideload. See [`docs/build.md`](docs/build.md).
 
 | | |
 | --- | --- |
-| Automated tests | **654 pass, 0 fail** — including 82 Compose UI tests that run on the JVM |
-| Automated tests | **642 pass, 0 fail** — including 82 Compose UI tests that run on the JVM |
+| Automated tests | **654 pass, 0 fail** — including 83 Compose UI tests that run on the JVM |
+| Automated tests | **664 pass, 0 fail** — including 83 Compose UI tests that run on the JVM |
 | Android Lint | clean, against a baseline of four reviewed categories |
 | Debug APK | builds, `apksigner verify` passes |
 | Release APK | builds (minified, resource-shrunk), `apksigner verify` passes |

@@ -1,6 +1,7 @@
 package io.github.tunlezah.roadguard.ui.gallery
 
 import android.app.Application
+import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -22,10 +23,12 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
 import java.util.Date
 import java.util.Locale
 
@@ -94,6 +97,12 @@ data class GalleryUiState(
     val days: List<GalleryDay> = emptyList(),
     val totalCount: Int = 0,
     val message: String? = null,
+    /**
+     * False until the index has been read once. Until then an empty [days] means "not read yet",
+     * not "no recordings": telling someone with a folder full of footage that there is nothing
+     * there, while the list is still being built, is how the recordings looked lost.
+     */
+    val loaded: Boolean = true,
 ) {
     /** Every card in display order, for the player's neighbours lookup. */
     val allTrips: List<GalleryTrip> get() = days.flatMap { it.trips }
@@ -142,14 +151,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private val message = MutableStateFlow<String?>(null)
     private val expandedTrips = MutableStateFlow<Set<Long>>(emptySet())
 
-    /** Route thumbnails, keyed by track file name and size so a growing track is redrawn. */
-    private val sketchCache = HashMap<String, List<Pair<Float, Float>>>()
+    /** Bumped when route thumbnails computed in the background are ready to be shown. */
+    private val sketchGeneration = MutableStateFlow(0)
+    private val pendingSketches: MutableSet<String> = Collections.synchronizedSet(LinkedHashSet())
+    private val sketchMutex = Mutex()
 
     /** Trips whose names are being resolved right now, so a rebuild does not start a second lookup. */
     private val resolving: MutableSet<Long> = Collections.synchronizedSet(HashSet())
 
     private data class Index(val segments: List<SegmentEntity>, val events: List<EventEntity>, val trips: List<TripEntity>)
-    private data class Chrome(val message: String?, val expanded: Set<Long>, val filter: GalleryFilter)
+    private data class Chrome(val message: String?, val expanded: Set<Long>, val filter: GalleryFilter, val sketches: Int)
 
     val state: StateFlow<GalleryUiState> = combine(
         combine(segments.observeAll(), events.observeAll(), trips.observeAll()) { s, e, t -> Index(s, e, t) },
@@ -157,7 +168,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         // persisted volume was applied at start-up would otherwise stay "missing" forever.
         container.storageManager.layoutGeneration,
         container.mapRepository.installState,
-        combine(message, expandedTrips, filter) { m, x, f -> Chrome(m, x, f) },
+        combine(message, expandedTrips, filter, sketchGeneration) { m, x, f, g -> Chrome(m, x, f, g) },
     ) { index, _, mapInstall, chrome ->
         build(index, mapInstall is MapInstallState.Installed, chrome)
     }
@@ -167,7 +178,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = GalleryUiState(),
+            initialValue = GalleryUiState(loaded = false),
         )
 
     init {
@@ -207,7 +218,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     event = segment.eventId?.let { eventsById[it] },
                     exists = file.exists(),
                     timeLabel = timeFormat.format(Date(segment.startedAtEpochMs)),
-                    inProgress = !segment.isComplete && storage.isFromThisProcess(segment.fileName),
+                    inProgress = !segment.isComplete && storage.isBeingWritten(segment.fileName),
                 )
             }
             .filter { item ->
@@ -249,7 +260,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             days = days,
             totalCount = index.segments.size,
             message = chrome.message,
-        )
+        ).also { requestSketches() }
     }
 
     private fun card(
@@ -306,15 +317,47 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         namesHint = null,
     )
 
+    /**
+     * The route thumbnail for [file] as far as it is known right now. Never reads the track.
+     *
+     * Reading every trip's GPX file used to happen inside the list build, so the first build after
+     * the screen opened read every track ever recorded -- megabytes per long drive -- before a
+     * single clip was shown, and the list said "No recordings yet" the whole time. That grew with
+     * every drive. Now a missing or out-of-date thumbnail is queued for [requestSketches], the list
+     * is shown straight away, and the thumbnail appears when it is ready.
+     */
     private fun sketchFor(file: File): List<Pair<Float, Float>> {
-        val key = "${file.name}:${file.length()}"
-        synchronized(sketchCache) { sketchCache[key]?.let { return it } }
-        val sketch = RouteSketch.normalise(GpxWriter.readPoints(file, SKETCH_POINTS))
-        synchronized(sketchCache) {
-            if (sketchCache.size > SKETCH_CACHE_LIMIT) sketchCache.clear()
-            sketchCache[key] = sketch
+        val cached = sketchCache[file.name]
+        if (cached == null || SketchEntry.isStale(cached, file.length(), SystemClock.elapsedRealtime())) {
+            pendingSketches += file.path
         }
-        return sketch
+        return cached?.points ?: emptyList()
+    }
+
+    /** Computes the thumbnails [sketchFor] queued, one pass at a time, then rebuilds the list once. */
+    private fun requestSketches() {
+        if (pendingSketches.isEmpty() || sketchMutex.isLocked) return
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!sketchMutex.tryLock()) return@launch
+            try {
+                var computed = 0
+                while (true) {
+                    val path = synchronized(pendingSketches) {
+                        pendingSketches.firstOrNull()?.also { pendingSketches.remove(it) }
+                    } ?: break
+                    val file = File(path)
+                    val size = file.length()
+                    val points = runCatching { RouteSketch.normalise(GpxWriter.readPoints(file, SKETCH_POINTS)) }
+                        .getOrDefault(emptyList())
+                    if (sketchCache.size > SKETCH_CACHE_LIMIT) sketchCache.clear()
+                    sketchCache[file.name] = SketchEntry(size, SystemClock.elapsedRealtime(), points)
+                    computed++
+                }
+                if (computed > 0) sketchGeneration.update { it + 1 }
+            } finally {
+                sketchMutex.unlock()
+            }
+        }
     }
 
     fun setFilter(value: GalleryFilter) {
@@ -428,10 +471,32 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         message.value = text
     }
 
+    /** A route thumbnail, with the track size it was drawn from and when. */
+    internal data class SketchEntry(val sizeBytes: Long, val computedAtElapsedMs: Long, val points: List<Pair<Float, Float>>) {
+        companion object {
+            /**
+             * Whether a thumbnail should be redrawn. Only when the track has changed, and for a
+             * track still being written -- whose size changes with every fix -- no more often than
+             * [SKETCH_REFRESH_MS], so recording does not cause a track read on every list rebuild.
+             */
+            fun isStale(entry: SketchEntry, currentSizeBytes: Long, nowElapsedMs: Long): Boolean =
+                entry.sizeBytes != currentSizeBytes && nowElapsedMs - entry.computedAtElapsedMs >= SKETCH_REFRESH_MS
+        }
+    }
+
     companion object {
         /** Points in a route thumbnail. Enough for the shape, few enough to draw per frame. */
         const val SKETCH_POINTS = 48
-        private const val SKETCH_CACHE_LIMIT = 500
+        private const val SKETCH_CACHE_LIMIT = 2_000
+
+        /** Shortest interval between redraws of a thumbnail whose track is still growing. */
+        const val SKETCH_REFRESH_MS = 60_000L
+
+        /**
+         * Route thumbnails by track file name, shared by every gallery and player screen for the
+         * life of the process, so opening the list again does not read every track again.
+         */
+        private val sketchCache = ConcurrentHashMap<String, SketchEntry>()
 
         /**
          * Whether a clip belongs under the "not in a trip" card rather than a trip's card.

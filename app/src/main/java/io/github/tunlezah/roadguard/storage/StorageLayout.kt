@@ -40,7 +40,12 @@ class StorageLayout(private val context: Context, val root: File) {
 
     fun dir(bucket: StorageBucket): File = File(root, bucket.dirName).apply { mkdirs() }
 
-    fun file(bucket: StorageBucket, name: String): File = File(dir(bucket), name)
+    /**
+     * A file in [bucket]. Resolving a path creates nothing: the gallery resolves every indexed clip
+     * each time it rebuilds, and a `mkdirs` per row turned that into thousands of needless
+     * filesystem calls. Whatever writes a file makes its directory first ([ensureDirectories]).
+     */
+    fun file(bucket: StorageBucket, name: String): File = File(File(root, bucket.dirName), name)
 
     /**
      * The sidecar that marks a segment as protected.

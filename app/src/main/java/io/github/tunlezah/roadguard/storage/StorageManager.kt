@@ -88,6 +88,25 @@ class StorageManager(
     /** True when [fileName] was created by this process rather than inherited from an earlier run. */
     fun isFromThisProcess(fileName: String): Boolean = fileName in createdThisProcess
 
+    /**
+     * Segment files the recorder is writing right now: created, and not yet finalised or given up
+     * on.
+     *
+     * Narrower than [isFromThisProcess] on purpose. "Created by this run and not marked complete"
+     * used to be the gallery's test for "still recording", but a clip whose recorder never reported
+     * back -- a camera that dropped out, a wedged encoder the watchdog restarted -- stays incomplete
+     * for the rest of the process, and a dashcam process can live for days. Every such clip was
+     * shown as "still being recorded" and refused by the player until the app was restarted.
+     */
+    private val beingWritten: MutableSet<String> = Collections.newSetFromMap(ConcurrentHashMap())
+
+    fun isBeingWritten(fileName: String): Boolean = fileName in beingWritten
+
+    /** The recorder is done with [fileName], whether it finished, failed or was abandoned. */
+    fun finishedWriting(fileName: String) {
+        beingWritten -= fileName
+    }
+
     fun useVolume(volumeId: String?) {
         val available = StorageLayout.availableVolumes(context)
         // A chosen card that is not mounted; or, rarer and seen right after boot, no external
@@ -264,6 +283,7 @@ class StorageManager(
             candidate = StorageLayout.segmentFileName(startedAtEpochMs, sequence + attempt, ::fileTimestamp)
         }
         createdThisProcess += candidate
+        beingWritten += candidate
         return File(layout.recordings, candidate)
     }
 
