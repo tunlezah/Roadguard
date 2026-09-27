@@ -62,6 +62,35 @@ class PmtilesReaderTest {
         assertThat(PmtilesReader.latitudeOf(z, y, 1.0)).isAtMost(-35.2708)
     }
 
+    // ── The header ────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `the header carries the archive's stated coverage`() {
+        val stated = MapBounds(minLon = 140.9, minLat = -37.6, maxLon = 153.7, maxLat = -28.1)
+        val withBounds = archive(
+            tiles = mapOf(Triple(12, bx, by) to placesTile(12, bx, by, listOf(braddon))),
+            bounds = stated,
+        )
+
+        PmtilesReader.open(withBounds)!!.use { reader ->
+            val bounds = reader.header.bounds!!
+            assertThat(bounds.minLon).isWithin(1e-6).of(140.9)
+            assertThat(bounds.minLat).isWithin(1e-6).of(-37.6)
+            assertThat(bounds.maxLon).isWithin(1e-6).of(153.7)
+            assertThat(bounds.maxLat).isWithin(1e-6).of(-28.1)
+            assertThat(reader.header.maxZoom).isEqualTo(12)
+        }
+    }
+
+    @Test
+    fun `an archive that states no coverage has no bounds`() {
+        val withoutBounds = archive(tiles = mapOf(Triple(12, bx, by) to placesTile(12, bx, by, listOf(braddon))))
+
+        PmtilesReader.open(withoutBounds)!!.use { reader ->
+            assertThat(reader.header.bounds).isNull()
+        }
+    }
+
     // ── Reading an archive ────────────────────────────────────────────────────────────
 
     @Test
@@ -167,6 +196,7 @@ class PmtilesReaderTest {
         tiles: Map<Triple<Int, Int, Int>, ByteArray>,
         useLeaf: Boolean = false,
         runLength: Long = 1,
+        bounds: MapBounds? = null,
     ): File {
         val tileData = ByteArrayOutputStream()
         val entries = tiles.entries
@@ -206,7 +236,11 @@ class PmtilesReaderTest {
         header.put(1) // tile type: mvt
         header.put(0) // min zoom
         header.put(12) // max zoom
-        header.putInt(0).putInt(0).putInt(0).putInt(0) // bounds
+        // Bounds, in ten-millionths of a degree; all zero when the archive states none.
+        header.putInt(((bounds?.minLon ?: 0.0) * 1e7).toInt())
+        header.putInt(((bounds?.minLat ?: 0.0) * 1e7).toInt())
+        header.putInt(((bounds?.maxLon ?: 0.0) * 1e7).toInt())
+        header.putInt(((bounds?.maxLat ?: 0.0) * 1e7).toInt())
         header.put(0).putInt(0).putInt(0) // centre
 
         val file = folder.newFile("synthetic.pmtiles")

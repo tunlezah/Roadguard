@@ -43,7 +43,9 @@ import io.github.tunlezah.roadguard.core.RoadguardContainer
 fun AboutScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val container = RoadguardContainer.from(context)
-    val mapAttribution = container.mapRepository.selectedPackage
+    // Every package shares one licence; the first installed map speaks for them all.
+    val mapAttribution = container.mapRepository.installed.value.firstOrNull()?.pack
+        ?: container.mapRepository.selectedPackage
     val weatherAttribution = container.weatherRepository.attribution
 
     Scaffold(

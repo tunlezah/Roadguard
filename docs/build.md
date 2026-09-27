@@ -124,9 +124,19 @@ it did.
 
 > **Signing status of any artifact from CI, stated plainly:** unless
 > `ROADGUARD_KEYSTORE_BASE64` and its companion secrets are configured on the repository, the
-> release APK is **signed with the public Android debug key**. It installs and runs. It is
-> **not** suitable for distribution, and Play would reject it. `versionName` says so, and the CI
-> log emits a `::notice::` saying so.
+> release APK is **signed with a debug key generated on the CI runner**. It installs and runs. It
+> is **not** suitable for distribution, and Play would reject it. `versionName` says so, and the CI
+> log emits a `::warning::` saying so.
+>
+> **This is what loses recordings between sideloaded builds.** A GitHub-hosted runner has no
+> `~/.android/debug.keystore`, so the build tools generate a fresh one every run, and every APK
+> from CI carries a different signature. Android refuses to install an APK over one signed with
+> a different key (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`), and the way round it -- uninstall, then
+> install -- deletes `Android/data/io.github.tunlezah.roadguard/`, which is where the recordings,
+> the index and the maps live. An update installed *over* the previous build keeps all of them.
+> Generate one release keystore, keep it, and put it in the repository secrets below; from then
+> on every build installs in place and nothing is lost. The same applies to local builds: use the
+> same `keystore.properties` on every machine that builds an APK for the phone.
 
 In CI, supply the keystore as a base64 secret:
 

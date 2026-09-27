@@ -49,6 +49,8 @@ class PmtilesReader private constructor(
         val tileType: Int,
         val minZoom: Int,
         val maxZoom: Int,
+        /** The coverage the archive states for itself, or null when its header carries none. */
+        val bounds: MapBounds? = null,
     )
 
     private class Entry(val tileId: Long, val runLength: Long, val length: Long, val offset: Long)
@@ -142,6 +144,13 @@ class PmtilesReader private constructor(
                 tileType = bytes[99].toInt() and 0xFF,
                 minZoom = bytes[100].toInt() and 0xFF,
                 maxZoom = bytes[101].toInt() and 0xFF,
+                // Bounds are signed 32-bit integers in ten-millionths of a degree.
+                bounds = MapBounds(
+                    minLon = buffer.getInt(102) / 1e7,
+                    minLat = buffer.getInt(106) / 1e7,
+                    maxLon = buffer.getInt(110) / 1e7,
+                    maxLat = buffer.getInt(114) / 1e7,
+                ).takeIf { it.isMeaningful },
             )
         }
 

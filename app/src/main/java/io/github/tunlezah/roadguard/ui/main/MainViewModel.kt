@@ -8,6 +8,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import io.github.tunlezah.roadguard.core.RoadguardContainer
 import io.github.tunlezah.roadguard.location.LocationState
+import io.github.tunlezah.roadguard.map.InstalledMap
 import io.github.tunlezah.roadguard.map.MapInstallState
 import io.github.tunlezah.roadguard.recording.RecordingUiState
 import io.github.tunlezah.roadguard.settings.PreviewZoom
@@ -41,14 +42,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         container.settings,
         container.recordingController.state,
         container.locationEngine.state,
-        container.mapRepository.installState,
+        combine(container.mapRepository.installState, container.mapRepository.activeMap) { install, active -> install to active },
         container.weatherRepository.state,
     ) { settings, recording, location, map, weather ->
         MainUiState(
             settings = settings,
             recording = recording,
             location = location,
-            mapInstall = map,
+            mapInstall = map.first,
+            activeMap = map.second,
             weather = weather,
             storage = container.storageManager.assessment.value,
             thermalLevel = recording.thermalLevel,
@@ -104,6 +106,8 @@ data class MainUiState(
     val recording: RecordingUiState = RecordingUiState(),
     val location: LocationState = LocationState(),
     val mapInstall: MapInstallState = MapInstallState.NotInstalled,
+    /** The map the pane shows: the most detailed installed one covering the vehicle. */
+    val activeMap: InstalledMap? = null,
     val weather: WeatherState = WeatherState.Unavailable(
         io.github.tunlezah.roadguard.weather.WeatherUnavailableReason.Disabled,
     ),

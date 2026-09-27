@@ -59,7 +59,7 @@ jobs:
             echo "Release keystore decoded from repository secrets."
           else
             echo "path=" >> "$GITHUB_OUTPUT"
-            echo "::notice::No ROADGUARD_KEYSTORE_BASE64 secret configured; the release APK will be signed with the Android debug key and is for sideloading/testing only."
+            echo "::warning::No ROADGUARD_KEYSTORE_BASE64 secret configured; the release APK will be signed with a debug key generated on this runner. Every run makes a different key, so this APK cannot be installed over a previous build: Android refuses the update, and uninstalling first deletes the app's recordings. Configure the release keystore secrets (docs/build.md section 5) before sideloading onto a phone with footage on it."
           fi
 
       - name: Android Lint

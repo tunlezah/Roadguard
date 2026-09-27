@@ -25,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -99,15 +100,21 @@ fun MapPane(
             .clip(PaneCorner)
             .background(MaterialTheme.colorScheme.surfaceContainer),
     ) {
-        when (val install = state.mapInstall) {
-            is MapInstallState.Installed ->
+        val active = state.activeMap
+        val install = state.mapInstall
+        when {
+            active != null ->
                 if (workBudget.renderEnabled) {
-                    MapSurface(
-                        state = state,
-                        workBudget = workBudget,
-                        themeMode = themeMode,
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                    // A different archive is a different map: the view is rebuilt around it,
+                    // which happens only when the vehicle crosses into another installed region.
+                    key(active.archive.absolutePath) {
+                        MapSurface(
+                            state = state,
+                            workBudget = workBudget,
+                            themeMode = themeMode,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                     MapOverlayControls(
                         state = state,
                         onRecentre = onRecentre,
@@ -118,7 +125,17 @@ fun MapPane(
                     MapPausedForHeat(Modifier.fillMaxSize())
                 }
 
-            is MapInstallState.Downloading -> MapInstallProgress(
+            // The selected package is installed but the installed maps have not been read from
+            // disk yet, which takes a moment at start.
+            install is MapInstallState.Installed -> MapInstallProgress(
+                title = "Opening the map",
+                detail = "Reading the installed map data",
+                eta = null,
+                fraction = null,
+                modifier = Modifier.fillMaxSize(),
+            )
+
+            install is MapInstallState.Downloading -> MapInstallProgress(
                 title = "Installing the offline map",
                 detail = install.totalBytes
                     ?.let { total -> "${install.bytesDownloaded / (1024 * 1024)} MB of ${total / (1024 * 1024)} MB" }
@@ -128,7 +145,7 @@ fun MapPane(
                 modifier = Modifier.fillMaxSize(),
             )
 
-            is MapInstallState.Verifying -> MapInstallProgress(
+            install is MapInstallState.Verifying -> MapInstallProgress(
                 title = "Checking the map data",
                 detail = "Making sure the download is complete",
                 eta = null,
@@ -136,7 +153,7 @@ fun MapPane(
                 modifier = Modifier.fillMaxSize(),
             )
 
-            is MapInstallState.Paused -> MapMessage(
+            install is MapInstallState.Paused -> MapMessage(
                 iconRes = R.drawable.ic_pause,
                 title = "Map installation paused",
                 body = "${install.bytesDownloaded / (1024 * 1024)} MB downloaded so far. It will resume where it left off.",
@@ -145,7 +162,7 @@ fun MapPane(
                 modifier = Modifier.fillMaxSize(),
             )
 
-            is MapInstallState.Failed -> MapMessage(
+            install is MapInstallState.Failed -> MapMessage(
                 iconRes = when (install.reason) {
                     MapFailureReason.NoNetwork -> R.drawable.ic_cloud_off
                     MapFailureReason.InsufficientStorage -> R.drawable.ic_storage
@@ -178,7 +195,7 @@ fun MapPane(
                 modifier = Modifier.fillMaxSize(),
             )
 
-            MapInstallState.NotInstalled -> MapMessage(
+            install is MapInstallState.NotInstalled -> MapMessage(
                 iconRes = R.drawable.ic_download_for_offline,
                 title = "Offline map not installed yet",
                 body = "Roadguard installs the map for you once, then it works with no SIM, no mobile data and " +
@@ -221,11 +238,9 @@ private fun MapSurface(
         }
     }
 
-    val installed = state.mapInstall as? MapInstallState.Installed
-    val spec: MapStyleSpec? = remember(installed?.packageId, themeMode) {
-        val container = io.github.tunlezah.roadguard.core.RoadguardContainer.from(context)
-        val pack = container.mapRepository.selectedPackage ?: return@remember null
-        styleProvider.styleFor(container.mapRepository.directoryFor(pack), pack, themeMode)
+    val active = state.activeMap
+    val spec: MapStyleSpec? = remember(active?.archive?.absolutePath, themeMode) {
+        active?.let { styleProvider.styleFor(it.directory, it.pack, themeMode) }
     }
 
     if (spec == null) {

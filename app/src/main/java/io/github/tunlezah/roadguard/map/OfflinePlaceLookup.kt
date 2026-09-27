@@ -23,27 +23,30 @@ interface PlaceLookup {
 }
 
 /**
- * Names a coordinate from the installed offline map archive.
+ * Names a coordinate from the installed offline map archives.
  *
- * The archive Roadguard downloads for the moving map carries a `places` layer -- suburbs, towns,
+ * The archives Roadguard downloads for the moving map carry a `places` layer -- suburbs, towns,
  * villages and cities, each with a kind and a population -- verified by decoding real tiles from
- * both the whole-of-Australia and the single-state archives. A lookup reads the nine tiles around
- * the point at the archive's deepest zoom for the fine name and at zoom [COARSE_ZOOM] for the city,
- * decodes only the places layer, and hands the candidates to [PlaceRanking].
+ * both the whole-of-Australia and the single-state archives. A lookup picks the most detailed
+ * installed archive covering the point ([MapChooser]), reads the nine tiles around it at that
+ * archive's deepest zoom for the fine name and at zoom [COARSE_ZOOM] for the city, decodes only
+ * the places layer, and hands the candidates to [PlaceRanking].
  *
- * Nothing here contacts anything: the file is the same one the map renders from, opened read-only.
+ * Nothing here contacts anything: the files are the ones the map renders from, opened read-only.
  */
 class OfflinePlaceLookup(private val mapRepository: MapRepository) : PlaceLookup {
 
     private val mutex = Mutex()
-    private var reader: PmtilesReader? = null
-    private var readerKey: String? = null
+
+    /** Open readers by archive identity, a few at most: one per installed map a drive touches. */
+    private val readers = LinkedHashMap<String, PmtilesReader>()
 
     override val isAvailable: Boolean get() = mapRepository.isInstalled()
 
     override suspend fun resolve(latitude: Double, longitude: Double): PlaceNames? = withContext(Dispatchers.IO) {
         mutex.withLock {
-            val open = openReader() ?: return@withLock null
+            val map = MapChooser.bestFor(mapRepository.installed.value, latitude, longitude) ?: return@withLock null
+            val open = openReader(map.archive) ?: return@withLock null
             runCatching {
                 val fine = placesAround(open, latitude, longitude, open.header.maxZoom)
                 val coarse = placesAround(open, latitude, longitude, minOf(COARSE_ZOOM, open.header.maxZoom))
@@ -76,35 +79,24 @@ class OfflinePlaceLookup(private val mapRepository: MapRepository) : PlaceLookup
     }
 
     /**
-     * The reader for the currently installed archive, reopened when the install changes.
+     * The reader for [archive], opened on first use and kept.
      *
-     * The key is path plus size plus modification time, so switching region or reinstalling never
-     * leaves a reader pointing at a directory table from the previous file.
+     * The key is path plus size plus modification time, so a reinstalled archive never gets a
+     * reader pointing at the directory table of the previous file: the stale reader for that path
+     * is closed and replaced. The cache is bounded, oldest out first.
      */
-    private fun openReader(): PmtilesReader? {
-        val archive = installedArchive() ?: run {
-            closeReader()
-            return null
-        }
+    private fun openReader(archive: File): PmtilesReader? {
         val key = "${archive.absolutePath}:${archive.length()}:${archive.lastModified()}"
-        if (key != readerKey) {
-            closeReader()
-            reader = PmtilesReader.open(archive)
-            readerKey = if (reader != null) key else null
+        readers[key]?.let { return it }
+        val stale = readers.keys.filter { it.startsWith("${archive.absolutePath}:") }
+        for (old in stale) readers.remove(old)?.close()
+        while (readers.size >= MAX_OPEN_READERS) {
+            val eldest = readers.keys.first()
+            readers.remove(eldest)?.close()
         }
+        val reader = PmtilesReader.open(archive) ?: return null
+        readers[key] = reader
         return reader
-    }
-
-    private fun installedArchive(): File? {
-        if (!mapRepository.isInstalled()) return null
-        val pack = mapRepository.selectedPackage ?: return null
-        return MapStyleProvider.findArchiveIn(mapRepository.directoryFor(pack))
-    }
-
-    private fun closeReader() {
-        reader?.close()
-        reader = null
-        readerKey = null
     }
 
     companion object {
@@ -116,5 +108,8 @@ class OfflinePlaceLookup(private val mapRepository: MapRepository) : PlaceLookup
          * label should choose from.
          */
         const val COARSE_ZOOM = 8
+
+        /** Readers kept open at once. A drive crosses one border at most a handful of times. */
+        const val MAX_OPEN_READERS = 3
     }
 }

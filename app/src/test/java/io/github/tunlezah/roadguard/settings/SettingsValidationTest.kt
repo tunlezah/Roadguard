@@ -409,10 +409,10 @@ class SettingsValidationTest {
     }
 
     @Test
-    fun `loop budget presets are two five ten twenty and thirty GiB`() {
+    fun `loop budget presets are two five ten fifteen twenty and thirty GiB`() {
         val gib = 1024L * 1024 * 1024
         assertThat(LoopBudget.presets)
-            .containsExactly(2 * gib, 5 * gib, 10 * gib, 20 * gib, 30 * gib)
+            .containsExactly(2 * gib, 5 * gib, 10 * gib, 15 * gib, 20 * gib, 30 * gib)
             .inOrder()
     }
 
