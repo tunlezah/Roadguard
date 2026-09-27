@@ -164,6 +164,7 @@ If the in-app Recordings list itself is empty or missing a drive:
 | A whole clip's metadata could not be read at start-up | the platform's metadata reader failing for a moment | the start-up check used to quarantine the clip as truncated. A whole file is now left in place and checked again next time |
 | The battery went flat | see *The battery went flat while recording* above | at most the clip in progress is lost, and it is quarantined rather than deleted |
 | The encoder failed repeatedly | a device whose hardware encoder rejects the stream | each failed clip is quarantined and the reason is in the recent events list |
+| A clip's trip grouping was lost | the trip a clip belonged to was removed while the clip remained — for example after the app was force-killed mid-drive — leaving the clip pointing at a drive that no longer exists | the clip is on disk **and** in the index, but the recordings list groups by drive and used to drop a clip whose drive had gone. So the list could be **empty while _Recordings on disk_ and _Segments indexed_ were both non-zero**. Fixed: such a clip is now shown under a *"Clips not yet in a trip"* card, and the next start regroups it into a real drive |
 | A microSD card was chosen and is not mounted | the card was ejected or slow to mount | Roadguard stands down rather than dropping the index or scattering footage onto internal storage; re-seat the card |
 
 Why a *long* drive can also lose everything: once the app is killed, recording cannot resume on
@@ -183,7 +184,10 @@ all — one more reason to set Roadguard's battery use to **Unrestricted**.
   list is short, the files exist and the index lost them; if it is zero, nothing was written to
   that folder.
 * **Segments indexed** — the database's count. A gap between this and *Recordings on disk* points
-  at the index, not the recorder.
+  at the index, not the recorder. If instead this **matches** *Recordings on disk* and both are
+  non-zero while the in-app list is empty, the footage is safe and it is the list that is at fault
+  — see the *trip grouping was lost* row above, and check *Clips recovered from a missing trip*
+  under Startup reconciliation.
 * **Startup reconciliation** — what the last start repaired, dropped or quarantined, and the
   per-clip verdict for each quarantined file. A verdict of *truncated: N bytes of video with no
   index* means that clip was being written normally and the app was killed mid-clip. An empty

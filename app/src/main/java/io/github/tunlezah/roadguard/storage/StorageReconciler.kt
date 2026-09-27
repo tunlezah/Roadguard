@@ -241,9 +241,11 @@ class StorageReconciler(
             }
         }
 
-        // 6-9. Trips: group what has none, close what was interrupted, drop what is empty, and
-        // remove the tracks nothing refers to. Each step is guarded so a failure in trips can
-        // never undo the footage repairs above.
+        // 6-10. Trips: re-home clips whose trip has gone, group what has none, close what was
+        // interrupted, drop what is empty, and remove the tracks nothing refers to. Each step is
+        // guarded so a failure in trips can never undo the footage repairs above.
+        val orphansRehomed = runCatching { trips.rehomeOrphaned() }
+            .onFailure { Log.w(TAG, "could not re-home orphaned clips", it) }.getOrDefault(0)
         val tripsAssembled = runCatching { trips.assignUnassigned() }
             .onFailure { Log.w(TAG, "could not assign clips to trips", it) }.getOrDefault(0)
         val tripsClosed = runCatching { trips.closeInterrupted() }
@@ -261,6 +263,7 @@ class StorageReconciler(
             reprotected = reprotected,
             closedEvents = closedEvents,
             notes = notes,
+            orphansRehomed = orphansRehomed,
             tripsAssembled = tripsAssembled,
             tripsClosed = tripsClosed,
             tripsPruned = tripsPruned,
@@ -328,6 +331,8 @@ data class ReconcileReport(
     val reprotected: Int,
     val closedEvents: Int,
     val notes: List<String>,
+    /** Clips whose trip row had gone missing and were detached so they could be regrouped. */
+    val orphansRehomed: Int = 0,
     val tripsAssembled: Int = 0,
     val tripsClosed: Int = 0,
     val tripsPruned: Int = 0,
@@ -337,7 +342,7 @@ data class ReconcileReport(
 ) {
     val changedAnything: Boolean
         get() = repairedIncomplete + quarantined + droppedRows + adoptedFiles + reprotected + closedEvents +
-            tripsAssembled + tripsClosed + tripsPruned + tracksDeleted > 0
+            orphansRehomed + tripsAssembled + tripsClosed + tripsPruned + tracksDeleted > 0
 
     fun summary(): String = if (!changedAnything) {
         notes.firstOrNull() ?: "Storage was consistent"
@@ -350,6 +355,7 @@ data class ReconcileReport(
             if (droppedRows > 0) add("$droppedRows stale entries removed")
             if (keptMissing > 0) add("$keptMissing missing file(s) kept in the index")
             if (closedEvents > 0) add("$closedEvents interrupted event(s) closed")
+            if (orphansRehomed > 0) add("$orphansRehomed clip(s) recovered from a missing trip")
             if (tripsAssembled > 0) add("$tripsAssembled clip(s) grouped into trips")
             if (tripsClosed > 0) add("$tripsClosed interrupted trip(s) closed")
             if (tripsPruned > 0) add("$tripsPruned empty trip(s) removed")
