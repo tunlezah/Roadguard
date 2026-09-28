@@ -20,8 +20,10 @@ import androidx.compose.runtime.remember
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import io.github.tunlezah.roadguard.location.LocationEngine
 import io.github.tunlezah.roadguard.core.RoadguardContainer
+import io.github.tunlezah.roadguard.recording.AutoStartPolicy
 import io.github.tunlezah.roadguard.recording.RecordingService
 import io.github.tunlezah.roadguard.settings.OrientationMode
 import io.github.tunlezah.roadguard.settings.Settings as RoadguardSettings
@@ -76,6 +78,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+
+        observePowerForAutoStart()
 
         setContent {
             val settings by container.settings.collectAsState()
@@ -238,7 +242,17 @@ class MainActivity : ComponentActivity() {
             val settings = container.settingsRepository.settings.first()
             if (!resumeRequested && hasStartedRecordingThisLaunch) return@launch
             if (!settings.setupComplete) return@launch
-            if (!resumeRequested && !settings.autoStartRecording) return@launch
+            // A resume tap is an explicit request and always honoured. An ordinary open honours the
+            // auto-start setting, and stands down if the driver's last action was an explicit Stop.
+            if (!resumeRequested &&
+                !AutoStartPolicy.shouldAutoStartOnOpen(
+                    setupComplete = settings.setupComplete,
+                    autoStartEnabled = settings.autoStartRecording,
+                    userStopped = container.sessionJournal.wasUserStopped(),
+                )
+            ) {
+                return@launch
+            }
             val cameraGranted = ContextCompat.checkSelfPermission(
                 this@MainActivity,
                 Manifest.permission.CAMERA,
@@ -246,6 +260,56 @@ class MainActivity : ComponentActivity() {
             if (!cameraGranted) return@launch
             // A camera foreground service may only be promoted from a visible Activity, so do
             // not start once the app has slipped into the background while we were reading.
+            if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return@launch
+            startRecordingService()
+        }
+    }
+
+    /**
+     * Starts recording when vehicle power is connected while the app is open.
+     *
+     * This is where "start when power is connected" lives, rather than in a service that would have
+     * to linger between drives to hear the broadcast. A camera foreground service may only be
+     * promoted from a visible Activity, so the connection is only acted on while this Activity is
+     * resumed -- which is also the only time it could legally start the camera. Only a *rising*
+     * edge counts: opening the app already plugged in is not a fresh connection and must not start
+     * recording on its own. An explicit Stop, an already-running session, and the auto-start
+     * setting are all honoured by [AutoStartPolicy].
+     */
+    private fun observePowerForAutoStart() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                var wasOnPower: Boolean? = null
+                container.powerMonitor.state
+                    .map { it.isOnExternalPower }
+                    .distinctUntilChanged()
+                    .collect { onPower ->
+                        val justConnected = wasOnPower == false && onPower
+                        wasOnPower = onPower
+                        if (justConnected) maybeStartOnPowerConnected()
+                    }
+            }
+        }
+    }
+
+    private fun maybeStartOnPowerConnected() {
+        lifecycleScope.launch {
+            val settings = container.settingsRepository.settings.first()
+            if (!AutoStartPolicy.shouldStartOnPowerConnected(
+                    setupComplete = settings.setupComplete,
+                    action = settings.onPowerConnected,
+                    userStopped = container.sessionJournal.wasUserStopped(),
+                    sessionActive = container.recordingController.state.value.isSessionActive,
+                )
+            ) {
+                return@launch
+            }
+            val cameraGranted = ContextCompat.checkSelfPermission(
+                this@MainActivity,
+                Manifest.permission.CAMERA,
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (!cameraGranted) return@launch
+            // Promotion is only legal while visible; do not start once the app has slipped away.
             if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return@launch
             startRecordingService()
         }

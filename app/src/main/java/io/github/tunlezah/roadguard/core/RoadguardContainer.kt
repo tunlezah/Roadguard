@@ -254,6 +254,12 @@ class RoadguardContainer(private val appContext: Context) {
      * consistent before the recorder writes to it.
      */
     fun onApplicationCreate() {
+        // Power monitoring is process-lifetime, not tied to the recording service. It is a single
+        // sticky broadcast receiver (no polling), and keeping it here means the app can start
+        // recording when the vehicle supplies power *while it is open* -- the one moment a camera
+        // foreground service may be promoted -- without keeping a service alive between drives just
+        // to listen. MainActivity acts on the connection; the recorder observes it while attached.
+        powerMonitor.start()
         applicationScope.launch {
             try {
                 // Wait for the settings actually persisted on disk. The hot [settings] StateFlow

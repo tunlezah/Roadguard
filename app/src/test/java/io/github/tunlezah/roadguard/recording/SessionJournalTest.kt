@@ -63,4 +63,33 @@ class SessionJournalTest {
 
         assertThat(SessionJournal(context).takeInterruptedSession()).isEqualTo(2_000L)
     }
+
+    @Test
+    fun `a fresh install has not been explicitly stopped`() {
+        assertThat(SessionJournal(context).wasUserStopped()).isFalse()
+    }
+
+    @Test
+    fun `an explicit stop is remembered across a restart until a manual start clears it`() {
+        SessionJournal(context).markUserStopped()
+
+        // A new instance stands in for the restarted process: the latch must survive it.
+        assertThat(SessionJournal(context).wasUserStopped()).isTrue()
+
+        SessionJournal(context).clearUserStopped()
+        assertThat(SessionJournal(context).wasUserStopped()).isFalse()
+    }
+
+    @Test
+    fun `the stop latch and the interrupted-session flag are independent`() {
+        val journal = SessionJournal(context)
+        // A deliberate Stop is not an interrupted session, and must not raise a resume prompt.
+        journal.markRecording(nowEpochMs = 5_000L)
+        journal.markStopped()
+        journal.markUserStopped()
+
+        val restarted = SessionJournal(context)
+        assertThat(restarted.takeInterruptedSession()).isNull()
+        assertThat(restarted.wasUserStopped()).isTrue()
+    }
 }

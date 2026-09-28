@@ -37,10 +37,31 @@ after the configured start-up delay. If it is on and nothing happens:
 1. **Camera permission.** Auto-start is skipped silently when the camera permission is not held,
    so grant it first (Settings → Apps → Roadguard → Permissions).
 2. **It starts once per launch.** Auto-start fires when the app is brought to the foreground on a
-   fresh launch, not every time you return from another screen, and not after you have manually
-   stopped a recording in the same session. Reopen the app to arm it again.
-3. **It cannot start while the app is in the background** — see *Recording did not start on boot*
+   fresh launch, not every time you return from another screen.
+3. **You stopped the last recording by hand.** An explicit Stop is remembered across app restarts,
+   so opening the app and connecting power both stand down until you press Record once more — a
+   deliberate Stop is not undone by an automatic trigger. Recording once by hand re-arms both. (A
+   device shutdown or a low-battery stop is not counted as your Stop and suppresses nothing.)
+4. **It cannot start while the app is in the background** — see *Recording did not start on boot*
    below for why a camera service can only be promoted from a visible screen.
+
+### Roadguard kept recording, or stayed active, after I stopped it
+
+Pressing **Stop** ends the recording *and* the foreground service: the notification clears, the
+camera is released, and Roadguard drops out of the "active apps" list. It no longer sits in the
+background holding the camera. If you ever saw it keep an "active" entry, or start recording again
+on its own after a Stop — for instance when you plugged the phone in at home — that was a service
+that outlived its recording. It now stands down once the session is over, and an explicit Stop
+suppresses the automatic starts until you record by hand again.
+
+Two things are deliberately *not* affected:
+
+* **Start when power is connected** still works, but only while Roadguard is open on screen (a
+  camera service can only be promoted from a visible app), and only if you have not just stopped by
+  hand. Plugging into the car with the app open starts a drive; plugging in at home after a Stop
+  does not.
+* **A recording in progress** is never touched by any of this. The service only stands down once
+  nothing is being written and the last clip has its closing index.
 
 ### Recording stops on its own
 
@@ -103,6 +124,7 @@ three lines in Settings → Diagnostics:
 | --- | --- |
 | *Recordings on disk* is 0 and *Quarantined files* is 0 | nothing from that day is on the phone any more. The loop deleted it (see below), or it was never written to this folder |
 | *Recordings on disk* is larger than *Segments indexed* | clips are on the disk that the list does not know about. The start-up check re-indexes them; *Startup reconciliation → Files re-indexed from disk* says how many it just did, and a note explains any it left for next time |
+| *On disk not yet indexed* is more than a clip's worth | the clip being recorded right now is bytes on the disk but zero in the index until it finishes, so a small gap here is normal *while recording*; a large gap at rest is footage the index has lost, re-indexed on the next start. This line and *Indexed clip bytes* are why the on-disk total and the storage screen's *Loop footage* can differ without either being wrong |
 | *Quarantined files* is more than 1 | clips were written and then judged unplayable. Each is listed with its verdict; "truncated: N bytes of video with no index" is a clip cut off mid-write |
 | *Startup reconciliation → Index rows dropped* is large | the index was emptied against an empty folder, the first fault above. The files are re-indexed on the next start if they are still there |
 

@@ -30,6 +30,7 @@ data class DiagnosticsSnapshot(
         }
         appendLine("Values marked [simulated] came from the developer thermal harness and are not measurements.")
         appendLine("Values marked [inferred] are derived, not reported by the platform.")
+        appendLine("Values marked [indexed] are sums from the recordings index; [measured] values are read from the disk.")
     }
 }
 
@@ -49,6 +50,14 @@ enum class Provenance(val suffix: String) {
 
     /** Measured by Roadguard on this device (a benchmark, a byte count, a duration). */
     Measured(" [measured]"),
+
+    /**
+     * A sum from the recordings index (the Room database) rather than a reading from the disk.
+     * Distinguished from [Measured] because the two can legitimately differ -- the clip being
+     * written is bytes on the disk but zero in the index until it finalises -- and calling an
+     * index sum "measured" is exactly what made the storage figures look like they disagreed.
+     */
+    Indexed(" [indexed]"),
 
     /** Derived from other values rather than reported. */
     Inferred(" [inferred]"),

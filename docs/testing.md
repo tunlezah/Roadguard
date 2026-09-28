@@ -15,8 +15,7 @@
 ./gradlew :app:testDebugUnitTest
 ```
 
-**654 tests. 0 failures. 0 errors. 0 skipped.** About 50 seconds of test execution on a warm
-**664 tests. 0 failures. 0 errors. 0 skipped.** About 50 seconds of test execution on a warm
+**673 tests. 0 failures. 0 errors. 0 skipped.** About 50 seconds of test execution on a warm
 build.
 
 | Suite | Tests | What it holds in place |
@@ -40,7 +39,8 @@ build.
 | `RecordingUiStateTest` | 7 | When the wake lock is held (until the last file is closed), when a session counts as active, and when Protect is offered |
 | `ForegroundServiceTypesTest` | 5 | The service claims location and microphone only with both the setting and the permission, so a declined permission can never stop recording |
 | `MapWorkBudgetTest` | 5 | The thermal and battery-safe map budgets really reduce map work: no animation when reduced, off screen when frozen |
-| `SessionJournalTest` | 4 | **Robolectric.** An interrupted session survives a process restart and produces exactly one resume prompt; a deliberate stop produces none |
+| `SessionJournalTest` | 7 | **Robolectric.** An interrupted session survives a process restart and produces exactly one resume prompt; a deliberate stop produces none; and an explicit Stop latch survives a restart, is independent of the interrupted-session flag, and clears on a manual start |
+| `RecordingLifecyclePolicyTest` | 5 | The service stands down only when armed, idle and holding no wake lock; opening the app and vehicle power auto-start only when set up, enabled and not standing down after an explicit Stop or an active session |
 | `SettingsComponentsUiTest` | 16 | **Compose UI.** Disabled rows still explaining themselves, the picker showing unsupported options greyed with a reason, sliders announcing values in words |
 | `SensorTraceTest` | 16 | Synthetic pothole / speed-bump / handling / braking / impact traces classifying as intended |
 | `DeviceTierScorerTest` | 16 | Every scoring combination, and both vetoes (`isLowRamDevice`, no hardware 1080p encoder) |
@@ -79,8 +79,7 @@ all answered by code that is exhaustively exercised on every push.
 
 ## 3. Compose UI tests that run on the JVM
 
-82 of the 654 are real Compose UI tests: they compose the production composables, read the
-83 of the 664 are real Compose UI tests: they compose the production composables, read the
+83 of the 673 are real Compose UI tests: they compose the production composables, read the
 semantics tree, and perform clicks. They live in `src/test` under Robolectric rather than in
 `src/androidTest`, which is a deliberate trade:
 

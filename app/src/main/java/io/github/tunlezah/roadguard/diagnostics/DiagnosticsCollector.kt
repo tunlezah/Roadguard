@@ -255,9 +255,7 @@ class DiagnosticsCollector(
                 add(
                     DiagnosticsEntry(
                         "Target rotation",
-                        CameraOrientationTracker.describe(
-                            recordingController.state.value.let { _ -> 0 },
-                        ),
+                        CameraOrientationTracker.describe(recordingController.surfaceRotation.value),
                         Provenance.Inferred,
                     ),
                 )
@@ -335,10 +333,10 @@ class DiagnosticsCollector(
                             },
                         ),
                     )
-                    add(DiagnosticsEntry("Loop used", mib(assessment.loopUsedBytes), Provenance.Measured))
+                    add(DiagnosticsEntry("Loop used", mib(assessment.loopUsedBytes), Provenance.Indexed))
                     add(DiagnosticsEntry("Loop budget", mib(assessment.effectiveBudgetBytes), Provenance.Inferred))
                     add(DiagnosticsEntry("Requested budget", mib(assessment.requestedBudgetBytes)))
-                    add(DiagnosticsEntry("Protected footage", mib(assessment.protectedBytes), Provenance.Measured))
+                    add(DiagnosticsEntry("Protected footage", mib(assessment.protectedBytes), Provenance.Indexed))
                     add(DiagnosticsEntry("Map data", mib(assessment.mapBytes), Provenance.Measured))
                     add(DiagnosticsEntry("Free space", mib(assessment.freeBytes), Provenance.PlatformReported))
                     add(DiagnosticsEntry("Reserve kept free", mib(assessment.reserveBytes), Provenance.Inferred))
@@ -364,14 +362,37 @@ class DiagnosticsCollector(
                 val onDisk = storageManager.layout.recordings
                     .listFiles { file -> file.isFile && file.name.endsWith(".mp4", ignoreCase = true) }
                     ?.toList().orEmpty()
+                val onDiskBytes = onDisk.sumOf { it.length() }
                 add(
                     DiagnosticsEntry(
                         "Recordings on disk",
-                        "${onDisk.size} file(s), ${mib(onDisk.sumOf { it.length() })}",
+                        "${onDisk.size} file(s), ${mib(onDiskBytes)}",
+                        Provenance.Measured,
+                    ),
+                )
+                // Reconcile the disk against the index, because these are the two figures that are
+                // read as "what is on the phone" and the two that can legitimately differ. The
+                // index counts finished clips; a clip being written, or one not yet re-indexed
+                // after a crash, is bytes on the disk that the index does not yet carry. Showing
+                // both, and the gap between them, is what turns an apparent contradiction into a
+                // number with an explanation.
+                val indexedBytes = segments.loopBytes() + segments.protectedBytes()
+                add(DiagnosticsEntry("Indexed clip bytes", mib(indexedBytes), Provenance.Indexed))
+                add(
+                    DiagnosticsEntry(
+                        "On disk not yet indexed",
+                        mib((onDiskBytes - indexedBytes).coerceAtLeast(0L)),
                         Provenance.Measured,
                     ),
                 )
                 add(DiagnosticsEntry("Segments indexed", "${segments.count()}", Provenance.Measured))
+                add(
+                    DiagnosticsEntry(
+                        "Incomplete rows",
+                        "${segments.incomplete().size}",
+                        Provenance.Indexed,
+                    ),
+                )
                 add(DiagnosticsEntry("Events recorded", "${events.count()}", Provenance.Measured))
                 val quarantineFiles = storageManager.layout.quarantine
                     .listFiles { file -> file.isFile }
