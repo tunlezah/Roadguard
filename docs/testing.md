@@ -15,7 +15,7 @@
 ./gradlew :app:testDebugUnitTest
 ```
 
-**673 tests. 0 failures. 0 errors. 0 skipped.** About 50 seconds of test execution on a warm
+**675 tests. 0 failures. 0 errors. 0 skipped.** About 50 seconds of test execution on a warm
 build.
 
 | Suite | Tests | What it holds in place |
@@ -54,7 +54,7 @@ build.
 | `PlaybackProblemsTest` | 6 | What the player says when playback fails: missing, unreadable, damaged, undecodable, each in words a driver can act on |
 | `PmtilesReaderTest` | 11 | PMTiles tile ids per the spec, tile coordinates, the header's stated coverage (and its absence), and reading tiles through root and leaf directories and run-length entries of a hand-built archive, then decoding its `places` layer |
 | `MapChooserTest` | 15 | Which of several installed maps is shown: the most detailed covering the vehicle, the deeper of two overlapping state boxes, no switch for a fix that merely brushes another map's edge, an immediate switch on leaving coverage, and the whole-country map with no position |
-| `GpxWriterTest` | 9 | The track is a valid GPX document before any point and after each one, reopens for appending, renames both `<name>` elements atomically, and reads back thinned for the route thumbnail |
+| `GpxWriterTest` | 11 | The track is a valid GPX document before any point and after each one, reopens for appending, renames both `<name>` elements atomically, and streams back thinned for the route thumbnail — counting each multi-line point once and staying in order across a long track |
 | `TripNamingTest` | 9 | Suburbs by default, cities between cities, towns alone in the country, loops, unknown ends and the time-based fallback |
 | `TrackPointFilterTest` | 8 | Five-metre movement, the 30 s stationary heartbeat that counts no distance, poor fixes ignored |
 | `RouteSketchTest` | 4 | Track points fitted into the unit square with their real proportions |
@@ -79,7 +79,7 @@ all answered by code that is exhaustively exercised on every push.
 
 ## 3. Compose UI tests that run on the JVM
 
-83 of the 673 are real Compose UI tests: they compose the production composables, read the
+83 of the 675 are real Compose UI tests: they compose the production composables, read the
 semantics tree, and perform clicks. They live in `src/test` under Robolectric rather than in
 `src/androidTest`, which is a deliberate trade:
 
