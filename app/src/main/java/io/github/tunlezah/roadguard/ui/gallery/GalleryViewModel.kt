@@ -334,29 +334,67 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         return cached?.points ?: emptyList()
     }
 
-    /** Computes the thumbnails [sketchFor] queued, one pass at a time, then rebuilds the list once. */
+    /**
+     * Computes the thumbnails [sketchFor] queued, one pass at a time, revealing them in waves.
+     *
+     * The pass used to bump the list only after the *last* track had been read, so on a long history
+     * every route thumbnail waited on the slowest one and the list showed placeholders until the
+     * whole queue drained. It now rebuilds every [SKETCH_BUMP_BATCH] tracks, so the first routes
+     * appear promptly and the rest fill in behind them -- the minimum shown first, the rest in slow
+     * time. The player does not wait on this queue at all; it reads its own trip's track directly
+     * through [routeSketch].
+     */
     private fun requestSketches() {
         if (pendingSketches.isEmpty() || sketchMutex.isLocked) return
         viewModelScope.launch(Dispatchers.IO) {
             if (!sketchMutex.tryLock()) return@launch
             try {
-                var computed = 0
+                var sinceBump = 0
                 while (true) {
                     val path = synchronized(pendingSketches) {
                         pendingSketches.firstOrNull()?.also { pendingSketches.remove(it) }
                     } ?: break
                     val file = File(path)
-                    val size = file.length()
-                    val points = runCatching { RouteSketch.normalise(GpxWriter.readPoints(file, SKETCH_POINTS)) }
-                        .getOrDefault(emptyList())
-                    if (sketchCache.size > SKETCH_CACHE_LIMIT) sketchCache.clear()
-                    sketchCache[file.name] = SketchEntry(size, SystemClock.elapsedRealtime(), points)
-                    computed++
+                    cacheSketch(file, file.length(), computeSketch(file))
+                    if (++sinceBump >= SKETCH_BUMP_BATCH) {
+                        sketchGeneration.update { it + 1 }
+                        sinceBump = 0
+                    }
                 }
-                if (computed > 0) sketchGeneration.update { it + 1 }
+                // Show whatever the last, partial wave computed. Nothing computed means no bump,
+                // so an empty queue drained by a racing pass does not churn the list.
+                if (sinceBump > 0) sketchGeneration.update { it + 1 }
             } finally {
                 sketchMutex.unlock()
             }
+        }
+    }
+
+    /** Reads one track (streaming) and turns it into route points. IO-bound; callers dispatch it. */
+    private fun computeSketch(file: File): List<Pair<Float, Float>> =
+        runCatching { RouteSketch.normalise(GpxWriter.readPoints(file, SKETCH_POINTS)) }.getOrDefault(emptyList())
+
+    private fun cacheSketch(file: File, sizeBytes: Long, points: List<Pair<Float, Float>>) {
+        if (sketchCache.size > SKETCH_CACHE_LIMIT) sketchCache.clear()
+        sketchCache[file.name] = SketchEntry(sizeBytes, SystemClock.elapsedRealtime(), points)
+    }
+
+    /**
+     * The route for one trip's track, for the player, which needs exactly one and should not wait
+     * on the gallery's whole-list queue.
+     *
+     * Returns the shared cache when it already holds a fresh sketch -- so returning to a clip whose
+     * route the list has drawn is instant -- and otherwise reads just this one track off the disk
+     * and caches it for the list to reuse. This is the "load the minimum as required" path.
+     */
+    suspend fun routeSketch(trackFile: File): List<Pair<Float, Float>> {
+        sketchCache[trackFile.name]?.let { cached ->
+            val size = withContext(Dispatchers.IO) { trackFile.length() }
+            if (!SketchEntry.isStale(cached, size, SystemClock.elapsedRealtime())) return cached.points
+        }
+        return withContext(Dispatchers.IO) {
+            val size = trackFile.length()
+            computeSketch(trackFile).also { cacheSketch(trackFile, size, it) }
         }
     }
 
@@ -493,6 +531,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         /** Points in a route thumbnail. Enough for the shape, few enough to draw per frame. */
         const val SKETCH_POINTS = 48
         private const val SKETCH_CACHE_LIMIT = 2_000
+
+        /** How many tracks a background pass reads before it reveals that wave of thumbnails. */
+        const val SKETCH_BUMP_BATCH = 6
 
         /** Shortest interval between redraws of a thumbnail whose track is still growing. */
         const val SKETCH_REFRESH_MS = 60_000L

@@ -138,6 +138,40 @@ class GpxWriterTest {
     }
 
     @Test
+    fun `readPoints counts each point once despite the extension and metadata lines around it`() {
+        // Every point here carries altitude, satellites, accuracy and a speed extension, so each
+        // trkpt spans many lines. The streaming reader must key on the one opening tag per point,
+        // not be thrown off by the lines between them.
+        val file = folder.newFile("t.gpx")
+        GpxWriter(file).use { writer ->
+            writer.open("t")
+            repeat(20) { i -> writer.append(-35.0 - i * 0.001, 149.0 + i * 0.001, 500.0, i * 1_000L, 12.5f, 4.0f, 9) }
+        }
+
+        val points = GpxWriter.readPoints(file, maxPoints = 1_000)
+
+        assertThat(points).hasSize(20)
+        assertThat(points.first()).isEqualTo(-35.0 to 149.0)
+        assertThat(points.last()).isEqualTo(-35.019 to 149.019)
+    }
+
+    @Test
+    fun `readPoints streams a long track and thins it in order`() {
+        val file = folder.newFile("t.gpx")
+        GpxWriter(file).use { writer ->
+            writer.open("t")
+            repeat(500) { i -> writer.append(-35.0 - i * 0.0005, 149.0 + i * 0.0005, null, i * 1_000L, null, null, null) }
+        }
+
+        val thinned = GpxWriter.readPoints(file, maxPoints = 50)
+
+        assertThat(thinned).hasSize(50)
+        assertThat(thinned.first()).isEqualTo(-35.0 to 149.0)
+        // Southbound the whole way, so the thinned sample must stay strictly ordered.
+        assertThat(thinned.zipWithNext().all { (a, b) -> a.first > b.first }).isTrue()
+    }
+
+    @Test
     fun `with a sync interval the writer still flushes on close`() {
         var now = 0L
         val file = folder.newFile("t.gpx")

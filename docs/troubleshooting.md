@@ -410,6 +410,44 @@ panel expands and the encoder gets the bandwidth back.
 `SpeedFilter` discards implausible jumps and low-accuracy fixes. If it is still noisy, the fix
 itself is poor — check the accuracy figure in Diagnostics.
 
+### The recordings list or the player shows no route (a blank thumbnail)
+
+The little map beside a trip — in the Recordings list and on the player's *This trip* card — is
+drawn from that trip's **GPX track**, not from the offline map. A blank thumbnail (the plain route
+icon) means one of two things: the route is still being drawn, or there is no track to draw.
+
+**If it fills in after a moment, that was loading, and it is now fast.** Each track is read off the
+disk and turned into the thumbnail in the background. Two things used to make that slow on a modest
+phone like the Moto G04, and both are fixed:
+
+* the reader loaded the *whole* GPX file into memory and scanned all of it, for every trip, before
+  the first thumbnail appeared. It now streams the file a line at a time and keeps only the
+  coordinates, so a long drive's track costs a fraction of the memory and time; and
+* the list revealed *all* the thumbnails only after the *last* track had been read. It now reveals
+  them in waves as they are read, and the **player reads only its own trip's track**, straight
+  away, instead of waiting for the whole list — so opening a clip shows its route promptly.
+
+**If it stays blank, the trip has no usable track.** A track needs location fixes, and there are
+several reasons a drive may have recorded none — most of them phone settings, not the app:
+
+| Check | Where | Why it matters |
+| --- | --- | --- |
+| **Location permission** | Settings → Apps → Roadguard → Permissions → Location: **Allow all the time** or **while using**, and **Use precise location ON** | With permission denied there are no fixes at all. With only *approximate* location, fixes are too coarse to accept, so the track stays empty and no route is drawn |
+| **Location master switch** | Settings → Location → **On** | Off means no provider, no fixes, no track |
+| **Google Location Accuracy** | Settings → Location → Location services → **Google Location Accuracy: On** | The Moto G04 is a single-band GNSS device; with this off, and under trees or between buildings, the first fix can take long enough that a short drive ends before any point is recorded |
+| **Save a GPX track of each trip** | Roadguard → Settings → Location | If this is off, or *Use location* above it is off, no track file is written and there is nothing to draw |
+| **A very short drive** | — | A drive that moves less than about five metres, or ends within a fix or two of starting, has too few points for a shape. `TrackPointFilter` deliberately ignores tiny movements and poor fixes |
+| **microSD removed or swapped** | — | Tracks live in Roadguard's storage. If they were on a card that is now out, the file cannot be found and the thumbnail is blank until the card is back; re-seating it brings the routes back on the next list rebuild |
+| **Battery optimisation killed the drive early** | Settings → Apps → Roadguard → Battery → **Unrestricted**, and remove it from Motorola's own "app sleep" list | A drive cut short still has a route, just a shorter one; but a drive killed in its first seconds may have no points yet |
+
+To tell "no track" from "still loading", open **Settings → Diagnostics → Location** while driving:
+a *Fix quality* of *Good* and a rising satellite count mean fixes are arriving and a track is being
+written. If the fix never leaves *Searching*, the causes above are where to look.
+
+The offline map being installed or not makes **no** difference to the route thumbnail — it only
+affects the trip's **name** ("Harrison → Braddon"). A trip can have a perfectly good route and still
+be named by its time if no map is installed.
+
 ---
 
 ## Events

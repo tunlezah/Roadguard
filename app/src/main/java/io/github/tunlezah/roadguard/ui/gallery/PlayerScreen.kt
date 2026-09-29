@@ -239,8 +239,25 @@ fun PlayerScreen(
                             VideoPlayer(item = item, modifier = Modifier.fillMaxWidth().weight(1f))
                             SegmentDetails(item = item, modifier = Modifier.fillMaxWidth())
                             position?.let { current ->
+                                // Load just this trip's route, off the main thread, without waiting
+                                // on the gallery's whole-list thumbnail queue. Seeded with whatever
+                                // the list already drew so a route it has in hand shows at once.
+                                val trackFile = current.trip.trackFile
+                                val route by produceState(
+                                    current.trip.sketch,
+                                    current.trip.key,
+                                    current.trip.sketch,
+                                    trackFile,
+                                ) {
+                                    value = when {
+                                        current.trip.sketch.isNotEmpty() -> current.trip.sketch
+                                        trackFile != null -> viewModel.routeSketch(trackFile)
+                                        else -> emptyList()
+                                    }
+                                }
                                 TripContext(
                                     position = current,
+                                    route = route,
                                     onOpenTrack = onOpenTrack,
                                     onAllClips = onBack,
                                     onOpenSegment = onOpenSegment,
@@ -266,6 +283,7 @@ fun PlayerScreen(
 @Composable
 private fun TripContext(
     position: ClipPosition,
+    route: List<Pair<Float, Float>>,
     onOpenTrack: (java.io.File) -> Unit,
     onAllClips: () -> Unit,
     onOpenSegment: (Long) -> Unit,
@@ -286,7 +304,7 @@ private fun TripContext(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        RouteThumbnail(points = trip.sketch, recording = trip.isRecording, modifier = Modifier.size(44.dp))
+                        RouteThumbnail(points = route, recording = trip.isRecording, modifier = Modifier.size(44.dp))
                         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(text = trip.title, style = MaterialTheme.typography.titleMedium)
                             Text(
