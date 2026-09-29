@@ -280,6 +280,7 @@ private fun ProvenanceBadge(provenance: Provenance) {
     val (text, colour) = when (provenance) {
         Provenance.PlatformReported -> return
         Provenance.Measured -> "measured" to MaterialTheme.colorScheme.primary
+        Provenance.Indexed -> "indexed" to MaterialTheme.colorScheme.onSurfaceVariant
         Provenance.Inferred -> "inferred" to MaterialTheme.colorScheme.onSurfaceVariant
         Provenance.Unavailable -> "not reported" to MaterialTheme.colorScheme.onSurfaceVariant
         Provenance.Simulated -> "SIMULATED" to status.critical

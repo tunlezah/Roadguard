@@ -107,6 +107,22 @@ class StorageManager(
         beingWritten -= fileName
     }
 
+    /**
+     * Bytes written to the clip currently being recorded, which the index still records as zero
+     * until the clip finalises.
+     *
+     * The recorder updates this as it writes and clears it to zero when nothing is being written.
+     * [refresh] adds it to the loop total so "loop used" is not short by a whole segment while one
+     * is in progress -- which is exactly the gap that made the storage figures disagree with the
+     * bytes actually on the disk. Volatile: written from the recorder's thread, read on refresh.
+     */
+    @Volatile
+    private var inFlightBytes: Long = 0L
+
+    fun setInFlightBytes(bytes: Long) {
+        inFlightBytes = bytes.coerceAtLeast(0L)
+    }
+
     fun useVolume(volumeId: String?) {
         val available = StorageLayout.availableVolumes(context)
         // A chosen card that is not mounted; or, rarer and seen right after boot, no external
@@ -155,7 +171,9 @@ class StorageManager(
     /** Recomputes the assessment. Cheap enough to call once per segment, not per frame. */
     suspend fun refresh(requestedBudgetBytes: Long): StorageAssessment = withContext(Dispatchers.IO) {
         val (total, free) = statsFor(layout.root)
-        val loopBytes = segments.loopBytes()
+        // The clip being written now is zero bytes in the index; count what is on the disk so the
+        // loop total matches reality and trimming reacts to the space a live clip is really using.
+        val loopBytes = segments.loopBytes() + inFlightBytes
         val protectedBytes = segments.protectedBytes()
         val mapBytes = directorySize(layout.maps)
         val rate = segments.measuredBytesPerSecond()

@@ -113,6 +113,20 @@ Three more platform facts shape the service:
 * **Shutdown.** The service listens for `ACTION_SHUTDOWN` and spends up to six seconds of
   Android's shutdown allowance closing the current file, so switching the phone off does not
   truncate the last clip.
+* **The service stops when the session is over.** A `camera` foreground service that outlived
+  its recording would keep the process's camera grant, keep the sensor/thermal/orientation and
+  tick loops running, and could be told to record again by a power event — which is how a phone
+  that was stopped keeps recording in the background. So once the recorder is idle and no clip is
+  still being finalised, the service leaves the foreground and stops itself (`ServiceStandDown`,
+  which is pure and tested); `onDestroy` then releases the wake lock and detaches the controller,
+  turning those listeners off. A later start makes a fresh service. Power monitoring is the one
+  thing kept process-lifetime (a single sticky-broadcast receiver, no polling), because "start
+  when power is connected **while the app is open**" is owned by the Activity — the only place a
+  camera service may legally be promoted — not by a service lingering between drives.
+* **An explicit Stop is remembered.** Pressing Stop latches a flag in `SessionJournal` that both
+  automatic starts (opening the app, vehicle power) honour: neither fires again until the driver
+  records by hand, which clears it (`AutoStartPolicy`). A device shutdown or a low-battery stop is
+  not a driver's Stop and does not latch it.
 
 ### 3.1 The segment loop
 

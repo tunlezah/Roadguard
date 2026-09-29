@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.google.common.truth.Truth.assertThat
 import io.github.tunlezah.roadguard.data.RoadguardDatabase
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -59,5 +60,19 @@ class StorageManagerWritingTest {
         val file = layout.file(StorageBucket.Recordings, "RG_1.mp4")
 
         assertThat(file.parentFile!!.exists()).isFalse()
+    }
+
+    @Test
+    fun `the loop total counts the clip being written, and stops counting it once it is done`() = runBlocking {
+        // The index records a clip as zero bytes until it finalises. Without the in-flight figure
+        // the loop total is short by a whole segment while one is being written, which is one of the
+        // ways the storage screen and the on-disk diagnostics figure came to disagree.
+        val budget = 5L * 1024 * 1024 * 1024
+
+        storage.setInFlightBytes(2_000_000)
+        assertThat(storage.refresh(budget).loopUsedBytes).isEqualTo(2_000_000)
+
+        storage.setInFlightBytes(0)
+        assertThat(storage.refresh(budget).loopUsedBytes).isEqualTo(0)
     }
 }

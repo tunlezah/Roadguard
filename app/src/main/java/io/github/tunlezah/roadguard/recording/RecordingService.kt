@@ -79,6 +79,16 @@ class RecordingService : LifecycleService() {
     private var alertedEpisode: Long? = null
     private var previousStatus: RecorderStatus = RecorderStatus.Idle
 
+    /**
+     * Armed once a session has actually run this service instance, or the driver has pressed Stop.
+     * Until then the idle state a freshly started service passes through before its first segment
+     * must not be mistaken for "the session is over".
+     */
+    private var standDownArmed = false
+
+    /** Set the instant a stand-down begins, so the state collector cannot start a second one. */
+    private var standingDown = false
+
     private val shutdownReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != Intent.ACTION_SHUTDOWN) return
@@ -115,12 +125,30 @@ class RecordingService : LifecycleService() {
         }
         attachIfNeeded()
         when (intent.action) {
-            ACTION_START -> container.recordingController.start()
-            ACTION_STOP -> container.recordingController.stop()
+            ACTION_START -> {
+                // Any start that reaches the service is one the driver asked for, or an automatic
+                // trigger that already checked the stop latch and was allowed through; either way
+                // the explicit-Stop latch no longer applies.
+                container.sessionJournal.clearUserStopped()
+                container.recordingController.start()
+            }
+
+            ACTION_STOP -> {
+                // A deliberate Stop: remember it so the next app open and the next power connection
+                // do not silently start recording again, and let the service stand down once the
+                // session is fully over.
+                standDownArmed = true
+                container.sessionJournal.markUserStopped()
+                container.recordingController.stop()
+                reviewStandDown(container.recordingController.state.value)
+            }
+
             ACTION_PROTECT -> container.recordingController.protectNow()
             // The promotion above has already re-read the types the permissions now allow.
             ACTION_REFRESH_TYPES -> Unit
             ACTION_SHUTDOWN -> {
+                // A device shutdown, not a driver's Stop: it closes the current clip but must not
+                // latch off the automatic triggers for the next boot.
                 container.recordingController.stop()
                 stopSelf()
             }
@@ -214,6 +242,7 @@ class RecordingService : LifecycleService() {
                     updateWakeLock(state)
                     updateNotification(state, assessment)
                     updateAlerts(state)
+                    reviewStandDown(state)
                 }
         }
 
@@ -264,6 +293,28 @@ class RecordingService : LifecycleService() {
                 notifications.cancelAlert(RecordingNotifications.NOTIFICATION_RESUME)
             }
             previousStatus = status
+        }
+    }
+
+    /**
+     * Stops the service once a session is over.
+     *
+     * A `camera` foreground service that outlives its recording keeps the process's camera grant,
+     * keeps the sensor, thermal, orientation and tick loops running, and can be told to record
+     * again by a power event -- which is how a phone that was stopped keeps recording in the
+     * background. So the moment the recorder is idle and nothing is still being finalised, the
+     * service leaves the foreground and stops; [onDestroy] then releases the wake lock and detaches
+     * the controller, which turns those listeners off. A later start makes a fresh service.
+     */
+    private fun reviewStandDown(state: RecordingUiState) {
+        if (state.isSessionActive) standDownArmed = true
+        if (!standingDown && ServiceStandDown.shouldStandDown(state.isSessionActive, state.holdsWakeLock, standDownArmed)) {
+            standingDown = true
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+            // A later state emission before onDestroy must not re-post the ongoing notification we
+            // just removed; clearing this makes updateNotification short-circuit.
+            promotedTypes = null
+            stopSelf()
         }
     }
 

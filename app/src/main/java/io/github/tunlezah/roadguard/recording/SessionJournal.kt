@@ -46,9 +46,28 @@ open class SessionJournal(context: Context) {
         return since
     }
 
+    /**
+     * The driver pressed Stop. Remembered across process death so the next app open, and the next
+     * time the phone sees power, do not silently start recording again: an explicit Stop must not
+     * be undone by an automatic trigger. Cleared by [clearUserStopped] when the driver next records
+     * by hand. See [AutoStartPolicy].
+     */
+    open fun markUserStopped() {
+        preferences.edit { putBoolean(KEY_USER_STOPPED, true) }
+    }
+
+    /** The driver started recording by hand, so the automatic triggers are welcome again. */
+    open fun clearUserStopped() {
+        preferences.edit { putBoolean(KEY_USER_STOPPED, false) }
+    }
+
+    /** True while an explicit Stop is still in force, i.e. no manual start has happened since. */
+    open fun wasUserStopped(): Boolean = preferences.getBoolean(KEY_USER_STOPPED, false)
+
     private companion object {
         const val FILE_NAME = "roadguard_session"
         const val KEY_ACTIVE = "recording_active"
         const val KEY_SINCE = "recording_since"
+        const val KEY_USER_STOPPED = "user_stopped"
     }
 }

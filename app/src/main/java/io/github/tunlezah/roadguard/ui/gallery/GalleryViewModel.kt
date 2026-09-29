@@ -433,6 +433,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         if (removed) {
             segments.deleteById(segmentId)
             segment.tripId?.let { storage.pruneEmptyTrips(listOf(it)) }
+            // Recompute the storage assessment now, so the Storage screen and Diagnostics do not
+            // keep showing a loop total that still counts the clip just deleted.
+            runCatching { storage.refresh(container.settings.value.loopBudgetBytes) }
             message.value = "Deleted"
         } else {
             message.value = "That file could not be deleted"
@@ -459,6 +462,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             }
             storage.pruneEmptyTrips(listOf(tripId))
         }
+        // Keep the storage figures honest after a bulk delete, as the single-clip path does.
+        runCatching { storage.refresh(container.settings.value.loopBudgetBytes) }
         message.value = when {
             failed > 0 -> "Deleted $deleted clip(s); $failed could not be deleted"
             deleted == 0 -> "Nothing to delete: every clip in this trip is protected"

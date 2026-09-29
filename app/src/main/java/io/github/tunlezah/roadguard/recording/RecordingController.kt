@@ -279,7 +279,9 @@ class RecordingController(
     /** Called by [RecordingService] once it is a foreground service and can own the camera. */
     fun attach(owner: LifecycleOwner) {
         attached = true
-        powerMonitor.start()
+        // Power monitoring is process-lifetime (started in RoadguardContainer), so the app can
+        // start recording when the vehicle supplies power while it is open, without keeping a
+        // foreground service alive between drives just to listen. The controller only observes it.
         thermalSource.start()
         orientationTracker.start()
         scope.launch {
@@ -297,7 +299,7 @@ class RecordingController(
         session.incrementAndGet()
         orientationTracker.stop()
         thermalSource.stop()
-        powerMonitor.stop()
+        // powerMonitor is process-lifetime and deliberately left running; see attach().
         scope.launch { detachInternal() }
     }
 
@@ -729,6 +731,8 @@ class RecordingController(
         activeSegment?.stopRequestedAtMs = SystemClock.elapsedRealtime()
         activeRecording = null
         activeSegment = null
+        // No clip is being written to right now; its bytes are (or soon will be) in the index.
+        storage.setInFlightBytes(0)
         recording?.let { runCatching { it.stop() }.onFailure { error -> Log.w(TAG, "stop failed", error) } }
         return recording != null
     }
@@ -786,6 +790,8 @@ class RecordingController(
         brakeLevel = null
         lastBrakeFixEpochMs = null
         peripheralsRunning = false
+        // The session is ending; nothing is being written, so the loop figure holds no in-flight clip.
+        storage.setInFlightBytes(0)
     }
 
     // ── Segments ──────────────────────────────────────────────────────────────────────────────
@@ -978,6 +984,10 @@ class RecordingController(
             handle.publishedMuted = muted
             handle.publishedAtMs = now
             val bytes = stats.numBytesRecorded
+            // The clip on disk that the index still records as zero bytes until it finalises. The
+            // storage assessment adds this so "loop used" is not short by a whole segment while one
+            // is being written, and so it never disagrees with the bytes actually on the disk.
+            storage.setInFlightBytes(bytes)
             update { state ->
                 if (state.segmentIndex == handle.index) state.copy(segmentBytes = bytes, audioMuted = muted) else state
             }
@@ -1062,6 +1072,8 @@ class RecordingController(
             // backstop, or an error). The session continues below.
             activeSegment = null
             activeRecording = null
+            // Its bytes land in the index just below; stop counting them as still-in-flight.
+            storage.setInFlightBytes(0)
         }
         if (event.hasError()) Log.w(TAG, "segment ${handle.index} finalised with error ${event.error}", event.cause)
 
@@ -1544,10 +1556,14 @@ class RecordingController(
         val active = _state.value.isSessionActive
         when (transition) {
             is PowerTransition.Connected -> {
-                // Power is back: a delayed stop scheduled for the disconnect no longer applies.
+                // Power is back: a delayed stop scheduled for the disconnect no longer applies, so
+                // a re-seated cable keeps the current session running.
                 scheduledStopJob?.cancel()
                 scheduledStopJob = null
-                if (PowerPolicy.onPowerConnected(settings) == PowerAction.StartRecording && !active) start()
+                // Starting a *new* session on power is owned by MainActivity, which only does it
+                // while the app is visible (the one time a camera service may be promoted) and
+                // honours an explicit Stop. Doing it here as well would need the service to linger
+                // between drives, and could race the Activity into a double start.
             }
 
             is PowerTransition.Disconnected -> when (val action = PowerPolicy.onPowerDisconnected(settings)) {
