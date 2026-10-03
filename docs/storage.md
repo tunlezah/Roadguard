@@ -161,11 +161,21 @@ missing in the list and counted in the report, until a start-up that can tell th
 
 **A file's structure decides its fate, not a metadata read.** `Mp4Inspector` walks the top-level
 boxes itself and asks the platform's `MediaMetadataRetriever` only for the duration and
-dimensions of a file that is already whole. A whole file whose metadata that reader cannot return
-is reported as `IndexedButUnread`, which no caller treats as a reason to move or drop anything:
-the reconciler leaves it in place for the next start, the recorder keeps it, and the player
-tries it. An index box whose declared size runs past the end of the file — the power going
-during the last write — is not an index at all, and the file is quarantined as truncated.
+dimensions of a file that is already whole. When that reader returns nothing, the inspector reads
+the duration the file's own index declares (the `mvhd` movie header inside `moov`, a few seeks)
+and the file is `Playable` on that basis, with the fields only the platform could supply left
+zero. A platform reader that fails on the *same* file every time — it happens — would otherwise
+keep a file out of the index on every start. Only a whole file whose header states no duration
+either is reported as `IndexedButUnread`, which no caller treats as a reason to move or drop
+anything: the reconciler leaves it in place for the next start, the recorder keeps it, and the
+player tries it. An index box whose declared size runs past the end of the file — the power
+going during the last write — is not an index at all, and the file is quarantined as truncated.
+
+**A row the database refuses is tried again within the session.** The recorder inserts a clip's
+row when the clip starts and, if that failed, again when it finalises. A clip refused both times
+is kept on the disk and remembered; each later clip that *is* indexed successfully is the proof
+the database is answering again, and the remembered clips get their rows then. Only a clip the
+database never accepts for the rest of the session is left to start-up reconciliation.
 
 **Each step of the pass runs on its own.** A database or file error in one step is noted in the
 report and the remaining steps still run, so nothing can stand between a file the index has lost

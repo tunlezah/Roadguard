@@ -252,6 +252,21 @@ class StorageReconcilerTest {
     }
 
     @Test
+    fun `an unindexed file the platform cannot read is adopted when its own index states a duration`() = runTest {
+        // No shadow metadata for this path: the platform's reader "fails" every time, as it does
+        // for some real files. Only the file's movie header knows the clip is three minutes long.
+        File(storage.layout.recordings, "RG_lost.mp4").writeBytes(mp4(withIndex = true, statedDurationMs = 180_000L))
+
+        val report = reconciler.reconcile()
+
+        assertWithMessage(report.toString()).that(report.adoptedFiles).isEqualTo(1)
+        assertWithMessage(report.toString()).that(report.quarantined).isEqualTo(0)
+        val adopted = database.segments().byFileName("RG_lost.mp4")!!
+        assertThat(adopted.isComplete).isTrue()
+        assertThat(adopted.durationMs).isEqualTo(180_000L)
+    }
+
+    @Test
     fun `a truncated file the index does not know about is quarantined`() = runTest {
         writeTruncated("RG_lost.mp4")
 
@@ -332,18 +347,28 @@ class StorageReconcilerTest {
     private fun writeTruncated(name: String): File =
         File(storage.layout.recordings, name).apply { writeBytes(mp4(withIndex = false)) }
 
-    /** The top-level box chain of an MP4: `ftyp`, then media, then -- only for a finished file -- the index. */
-    private fun mp4(withIndex: Boolean): ByteArray {
+    /**
+     * The top-level box chain of an MP4: `ftyp`, then media, then -- only for a finished file --
+     * the index. With [statedDurationMs], the index carries a movie header (`mvhd`, timescale
+     * 1000) declaring that duration, as a muxer's would.
+     */
+    private fun mp4(withIndex: Boolean, statedDurationMs: Long? = null): ByteArray {
         val out = ByteArrayOutputStream()
-        fun box(type: String, payload: ByteArray) {
+        fun boxBytes(type: String, payload: ByteArray): ByteArray {
             val size = 8 + payload.size
-            out.write(byteArrayOf((size ushr 24).toByte(), (size ushr 16).toByte(), (size ushr 8).toByte(), size.toByte()))
-            out.write(type.toByteArray(Charsets.US_ASCII))
-            out.write(payload)
+            return byteArrayOf((size ushr 24).toByte(), (size ushr 16).toByte(), (size ushr 8).toByte(), size.toByte()) +
+                type.toByteArray(Charsets.US_ASCII) + payload
         }
-        box("ftyp", "isom".toByteArray(Charsets.US_ASCII) + ByteArray(4))
-        box("mdat", ByteArray(40 * 1024))
-        if (withIndex) box("moov", ByteArray(8))
+        fun u32(value: Long) = byteArrayOf((value ushr 24).toByte(), (value ushr 16).toByte(), (value ushr 8).toByte(), value.toByte())
+        out.write(boxBytes("ftyp", "isom".toByteArray(Charsets.US_ASCII) + ByteArray(4)))
+        out.write(boxBytes("mdat", ByteArray(40 * 1024)))
+        if (withIndex) {
+            val header = statedDurationMs?.let { duration ->
+                // version 0, flags, creation time, modification time, timescale, duration, padding
+                boxBytes("mvhd", ByteArray(4) + u32(0) + u32(0) + u32(1_000) + u32(duration) + ByteArray(80))
+            } ?: ByteArray(0)
+            out.write(boxBytes("moov", header + ByteArray(8)))
+        }
         return out.toByteArray()
     }
 }

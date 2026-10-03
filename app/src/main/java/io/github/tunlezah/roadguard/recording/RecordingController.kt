@@ -860,8 +860,8 @@ class RecordingController(
                 segments.insert(row)
             }.onFailure {
                 // Recording matters more than its index. The insert is tried again when the clip
-                // finalises (indexLate), and start-up reconciliation adopts any file still left
-                // without a row.
+                // finalises (indexLate), then each time a later clip is indexed (retryUnindexed),
+                // and start-up reconciliation adopts any file still left without a row.
                 Log.w(TAG, "could not index segment $index", it)
             }.getOrNull()
         }
@@ -1147,11 +1147,17 @@ class RecordingController(
         // The row normally exists from the moment the segment started. If that insert failed, a
         // playable clip is indexed now, rather than staying invisible in the gallery until the next
         // start-up happens to adopt it -- which, for a phone left recording for days, is never.
+        val location = locationEngine.state.value
         val segmentId = handle.segmentId
             ?: (if (usable) indexLate(handle) else null)
-            ?: return@withContext usable
+            ?: run {
+                // Twice refused by the database. The file is kept, and the row is tried again as
+                // later clips are indexed, because a database that is back is proven only by a
+                // write that succeeds.
+                if (usable) rememberUnindexed(UnindexedClip(handle, durationMs, location))
+                return@withContext usable
+            }
         if (usable) {
-            val location = locationEngine.state.value
             segments.markComplete(
                 id = segmentId,
                 durationMs = durationMs,
@@ -1159,6 +1165,9 @@ class RecordingController(
                 endLatitude = location.latitude?.takeIf { location.hasPosition },
                 endLongitude = location.longitude?.takeIf { location.hasPosition },
             )
+            // This write went through, so the database is answering: the clips it refused
+            // earlier in this session get their rows now.
+            retryUnindexed()
             (handle.tripId ?: activeTripId)?.let { tripId ->
                 runCatching { trips.onSegmentFinalised(tripId, handle.startedAtEpochMs + durationMs, location) }
                     .onFailure { Log.w(TAG, "could not advance trip $tripId", it) }
@@ -1185,6 +1194,61 @@ class RecordingController(
         handle.segmentId = id
         Log.i(TAG, "indexed segment ${handle.index} at finalise; its first insert had failed")
     }.onFailure { Log.w(TAG, "could not index segment ${handle.index}", it) }.getOrNull()
+
+    /**
+     * A finished, playable clip the database refused to index both when it started and when it
+     * finalised. Its file is on the disk and counted in this session; only the row is missing.
+     */
+    private class UnindexedClip(val handle: SegmentHandle, val durationMs: Long, val endLocation: LocationState)
+
+    /**
+     * Clips left without a row in this session, oldest first. Guarded by its own monitor: clips
+     * are added and retried from the recorder's finalise path, which runs on the IO dispatcher.
+     * Bounded, because every clip here is also a file start-up reconciliation will adopt; a
+     * database that stays down for hours should not grow a list for it in memory.
+     */
+    private val unindexedClips = ArrayDeque<UnindexedClip>()
+
+    private fun rememberUnindexed(clip: UnindexedClip) {
+        synchronized(unindexedClips) {
+            if (unindexedClips.size >= MAX_UNINDEXED_REMEMBERED) unindexedClips.removeFirst()
+            unindexedClips.addLast(clip)
+        }
+        Log.w(TAG, "segment ${clip.handle.index} is on the disk without an index row; will retry as later clips finalise")
+    }
+
+    /**
+     * Gives the clips in [unindexedClips] the rows they were refused, stopping at the first that
+     * is refused again: the database is evidently still unwell, and the rest wait for the next
+     * successful write. A clip whose file has gone meanwhile is simply forgotten.
+     */
+    private suspend fun retryUnindexed() {
+        while (true) {
+            val clip = synchronized(unindexedClips) { unindexedClips.firstOrNull() } ?: return
+            val handle = clip.handle
+            if (!handle.file.exists()) {
+                synchronized(unindexedClips) { unindexedClips.remove(clip) }
+                continue
+            }
+            val segmentId = indexLate(handle) ?: return
+            val completed = runCatching {
+                segments.markComplete(
+                    id = segmentId,
+                    durationMs = clip.durationMs,
+                    sizeBytes = handle.file.length(),
+                    endLatitude = clip.endLocation.latitude?.takeIf { clip.endLocation.hasPosition },
+                    endLongitude = clip.endLocation.longitude?.takeIf { clip.endLocation.hasPosition },
+                )
+            }.onFailure { Log.w(TAG, "could not complete the late row of segment ${handle.index}", it) }.isSuccess
+            if (!completed) return
+            synchronized(unindexedClips) { unindexedClips.remove(clip) }
+            handle.tripId?.let { tripId ->
+                runCatching { trips.onSegmentFinalised(tripId, handle.startedAtEpochMs + clip.durationMs, clip.endLocation) }
+                    .onFailure { Log.w(TAG, "could not advance trip $tripId", it) }
+            }
+            Log.i(TAG, "indexed segment ${handle.index} late; the database had refused it twice")
+        }
+    }
 
     /**
      * Makes what an abandoned recording left behind playable in this session, when it can be.
@@ -1950,6 +2014,9 @@ class RecordingController(
          * the recovery backoff instead of spinning the segment loop.
          */
         const val SHORT_UNPROMPTED_SEGMENT_MS = 3_000L
+
+        /** Clips kept in memory for a late index row; beyond this, start-up reconciliation has them. */
+        private const val MAX_UNINDEXED_REMEMBERED = 200
 
         /** Finalise errors whose file is complete and playable by CameraX's own contract. */
         private val TRUSTED_FINALIZE_ERRORS = setOf(

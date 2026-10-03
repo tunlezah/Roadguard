@@ -46,14 +46,23 @@ object Mp4Inspector {
             hasIndex && hasMedia -> {
                 val metadata = readMetadata(file)
                 if (metadata != null && metadata.durationMs > 0) {
-                    Mp4Verdict.Playable(metadata)
-                } else {
-                    // The structure is whole: index and media are both there. Only the metadata
-                    // read failed, and that read is a platform service that can fail for reasons
-                    // of its own. Saying so, rather than "truncated", is what stops a good file
-                    // being moved to quarantine on the strength of a passing failure.
-                    Mp4Verdict.IndexedButUnread(length)
+                    return Mp4Verdict.Playable(metadata)
                 }
+                // The platform could not describe the file, but the index it just found states
+                // the clip's duration itself (`moov/mvhd`), and that is a handful of bytes to read.
+                // A clip whose metadata the platform never manages to read -- it happens, and it
+                // happens to the same file every time -- would otherwise stay "left for the next
+                // start" on every start, which for an unindexed file means never in the gallery.
+                val stated = boxes.firstOrNull { it.type == "moov" && it.isWhole }
+                    ?.let { moov -> runCatching { readStatedDuration(file, moov) }.getOrNull() }
+                if (stated != null && stated > 0) {
+                    return Mp4Verdict.Playable((metadata ?: Mp4Metadata.unknown()).copy(durationMs = stated))
+                }
+                // The structure is whole: index and media are both there. Only the metadata
+                // read failed, and that read is a platform service that can fail for reasons
+                // of its own. Saying so, rather than "truncated", is what stops a good file
+                // being moved to quarantine on the strength of a passing failure.
+                Mp4Verdict.IndexedButUnread(length)
             }
 
             hasMedia -> Mp4Verdict.TruncatedNoIndex(length, bytesOfMedia(boxes))
@@ -104,6 +113,58 @@ object Mp4Inspector {
     private fun bytesOfMedia(boxes: List<Mp4Box>): Long =
         boxes.filter { it.type == "mdat" }.sumOf { it.size }
 
+    /**
+     * The duration the index itself declares, in milliseconds, or null when it declares none.
+     *
+     * `moov` holds a movie header (`mvhd`) whose timescale and duration describe the whole
+     * presentation (ISO/IEC 14496-12 §8.2.2). Only the headers of `moov`'s direct children are
+     * read, so this costs a few seeks however large the sample tables are. A duration of all ones
+     * is the specification's "unknown" and does not count.
+     */
+    private fun readStatedDuration(file: File, moov: Mp4Box): Long? {
+        RandomAccessFile(file, "r").use { raf ->
+            raf.seek(moov.offset)
+            val headerSize = if ((raf.readInt().toLong() and 0xFFFFFFFFL) == 1L) 16L else 8L
+            val end = moov.offset + moov.size
+            var offset = moov.offset + headerSize
+            var children = 0
+            while (offset + 8 <= end && children++ < MAX_BOXES) {
+                raf.seek(offset)
+                val size32 = raf.readInt().toLong() and 0xFFFFFFFFL
+                val typeBytes = ByteArray(4)
+                raf.readFully(typeBytes)
+                val type = String(typeBytes, Charsets.US_ASCII)
+                val (size, childHeader) = when (size32) {
+                    1L -> raf.readLong() to 16L
+                    0L -> (end - offset) to 8L
+                    else -> size32 to 8L
+                }
+                if (size < childHeader || offset + size > end) return null
+                if (type == "mvhd") {
+                    val version = raf.readByte().toInt()
+                    raf.skipBytes(3) // flags
+                    val timescale: Long
+                    val duration: Long
+                    if (version == 1) {
+                        raf.skipBytes(16) // creation and modification time, 64-bit each
+                        timescale = raf.readInt().toLong() and 0xFFFFFFFFL
+                        duration = raf.readLong()
+                        if (duration == -1L) return null
+                    } else {
+                        raf.skipBytes(8) // creation and modification time, 32-bit each
+                        timescale = raf.readInt().toLong() and 0xFFFFFFFFL
+                        duration = raf.readInt().toLong() and 0xFFFFFFFFL
+                        if (duration == 0xFFFFFFFFL) return null
+                    }
+                    if (timescale <= 0L || duration <= 0L) return null
+                    return duration * 1_000L / timescale
+                }
+                offset += size
+            }
+        }
+        return null
+    }
+
     private fun readMetadata(file: File): Mp4Metadata? {
         val retriever = MediaMetadataRetriever()
         return try {
@@ -149,11 +210,29 @@ data class Mp4Metadata(
     val mimeType: String?,
     val hasAudio: Boolean,
     val captureFrameRate: Float?,
-)
+) {
+    companion object {
+        /** What is known about a file the platform could not describe at all: nothing yet. */
+        fun unknown() = Mp4Metadata(
+            durationMs = 0L,
+            width = 0,
+            height = 0,
+            rotationDegrees = 0,
+            bitrateBps = 0,
+            mimeType = null,
+            hasAudio = false,
+            captureFrameRate = null,
+        )
+    }
+}
 
 /** What [Mp4Inspector] concluded about a file. */
 sealed interface Mp4Verdict {
-    /** The file opens and reports a real duration. */
+    /**
+     * The file opens and reports a real duration -- from the platform's metadata reader when it
+     * works, else from the movie header in the file's own index. Fields that reader alone could
+     * supply (dimensions, codec) are zero or null when it did not.
+     */
     data class Playable(val metadata: Mp4Metadata) : Mp4Verdict
 
     /**
@@ -164,8 +243,9 @@ sealed interface Mp4Verdict {
 
     /**
      * Index and media are both present and whole, but the platform's metadata reader could not
-     * describe the file this time. The file is left exactly where it is: a player may well open
-     * it, and the next check may succeed. Never a reason to move or drop anything.
+     * describe the file this time and its index states no duration either. The file is left
+     * exactly where it is: a player may well open it, and the next check may succeed. Never a
+     * reason to move or drop anything.
      */
     data class IndexedButUnread(val fileBytes: Long) : Mp4Verdict
 

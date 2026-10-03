@@ -386,6 +386,19 @@ class DiagnosticsCollector(
                     ),
                 )
                 add(DiagnosticsEntry("Segments indexed", "${segments.count()}", Provenance.Measured))
+                // The gallery is built from index rows, never from the folder, so a file with no
+                // row is footage the user cannot see. One such file is normal while recording
+                // (the clip being written); more than that is the figure to explain.
+                val indexedNames = segments.allFileNames().toHashSet()
+                val unindexed = onDisk.count { it.name !in indexedNames }
+                add(
+                    DiagnosticsEntry(
+                        "Files on disk without an index row",
+                        "$unindexed",
+                        Provenance.Measured,
+                        if (unindexed > 1) EntrySeverity.Warning else EntrySeverity.Normal,
+                    ),
+                )
                 add(
                     DiagnosticsEntry(
                         "Incomplete rows",
