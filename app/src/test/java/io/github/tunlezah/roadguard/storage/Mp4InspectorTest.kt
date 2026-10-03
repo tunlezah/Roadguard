@@ -57,6 +57,44 @@ class Mp4InspectorTest {
     }
 
     @Test
+    fun `a whole file the platform cannot read is playable when its own index states a duration`() {
+        val file = write("stated.mp4", mp4(indexBytes = 64, statedDuration = 180_000L))
+
+        val verdict = Mp4Inspector.inspect(file)
+
+        assertThat(verdict).isInstanceOf(Mp4Verdict.Playable::class.java)
+        assertThat((verdict as Mp4Verdict.Playable).metadata.durationMs).isEqualTo(180_000L)
+        assertThat(verdict.metadata.width).isEqualTo(0)
+    }
+
+    @Test
+    fun `a 64-bit movie header states its duration just as well`() {
+        val file = write("stated64.mp4", mp4(indexBytes = 64, statedDuration = 90_500L, headerVersion = 1))
+
+        val verdict = Mp4Inspector.inspect(file)
+
+        assertThat(verdict).isInstanceOf(Mp4Verdict.Playable::class.java)
+        assertThat((verdict as Mp4Verdict.Playable).metadata.durationMs).isEqualTo(90_500L)
+    }
+
+    @Test
+    fun `the platform's reading wins over the header when both are available`() {
+        val file = write("both.mp4", mp4(indexBytes = 64, statedDuration = 180_000L))
+        ShadowMediaMetadataRetriever.addMetadata(file.absolutePath, MediaMetadataRetriever.METADATA_KEY_DURATION, "179800")
+
+        val verdict = Mp4Inspector.inspect(file)
+
+        assertThat((verdict as Mp4Verdict.Playable).metadata.durationMs).isEqualTo(179_800L)
+    }
+
+    @Test
+    fun `a header that states no duration leaves the file whole-but-unread`() {
+        val file = write("unknown.mp4", mp4(indexBytes = 64, statedDuration = 0xFFFFFFFFL))
+
+        assertThat(Mp4Inspector.inspect(file)).isInstanceOf(Mp4Verdict.IndexedButUnread::class.java)
+    }
+
+    @Test
     fun `a file with media and no index is truncated`() {
         val file = write("cut.mp4", mp4(indexBytes = null))
 
@@ -101,18 +139,40 @@ class Mp4InspectorTest {
 
     private fun write(name: String, bytes: ByteArray): File = File(folder.root, name).apply { writeBytes(bytes) }
 
-    /** `ftyp`, then media, then -- unless [indexBytes] is null -- an index box of that payload size. */
-    private fun mp4(indexBytes: Int?): ByteArray {
+    /**
+     * `ftyp`, then media, then -- unless [indexBytes] is null -- an index box of that payload size.
+     * With [statedDuration], the index opens with a movie header declaring that many milliseconds
+     * (timescale 1000) in version 0 or, with [headerVersion] 1, 64-bit form; the rest is padding.
+     */
+    private fun mp4(indexBytes: Int?, statedDuration: Long? = null, headerVersion: Int = 0): ByteArray {
         val out = ByteArrayOutputStream()
-        fun box(type: String, payload: ByteArray) {
+        fun boxBytes(type: String, payload: ByteArray): ByteArray {
             val size = 8 + payload.size
-            out.write(byteArrayOf((size ushr 24).toByte(), (size ushr 16).toByte(), (size ushr 8).toByte(), size.toByte()))
-            out.write(type.toByteArray(Charsets.US_ASCII))
-            out.write(payload)
+            return byteArrayOf((size ushr 24).toByte(), (size ushr 16).toByte(), (size ushr 8).toByte(), size.toByte()) +
+                type.toByteArray(Charsets.US_ASCII) + payload
         }
+        fun box(type: String, payload: ByteArray) = out.write(boxBytes(type, payload))
         box("ftyp", "isom".toByteArray(Charsets.US_ASCII) + ByteArray(4))
         box("mdat", ByteArray(40 * 1024))
-        if (indexBytes != null) box("moov", ByteArray(indexBytes))
+        if (indexBytes != null) {
+            val header = statedDuration?.let { boxBytes("mvhd", movieHeader(it, headerVersion)) } ?: ByteArray(0)
+            box("moov", header + ByteArray(indexBytes))
+        }
+        return out.toByteArray()
+    }
+
+    /** An `mvhd` payload: version, flags, creation and modification times, timescale 1000, duration. */
+    private fun movieHeader(durationMs: Long, version: Int): ByteArray {
+        val out = ByteArrayOutputStream()
+        fun u32(value: Long) = out.write(byteArrayOf((value ushr 24).toByte(), (value ushr 16).toByte(), (value ushr 8).toByte(), value.toByte()))
+        fun u64(value: Long) { u32(value ushr 32); u32(value and 0xFFFFFFFFL) }
+        out.write(byteArrayOf(version.toByte(), 0, 0, 0))
+        if (version == 1) {
+            u64(0); u64(0); u32(1_000); u64(durationMs)
+        } else {
+            u32(0); u32(0); u32(1_000); u32(durationMs)
+        }
+        out.write(ByteArray(80)) // rate, volume, matrix, pre-defined, next track id
         return out.toByteArray()
     }
 }

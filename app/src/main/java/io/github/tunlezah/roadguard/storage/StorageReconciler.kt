@@ -114,7 +114,10 @@ class StorageReconciler(
                                 sizeBytes = file.length(),
                                 widthPx = verdict.metadata.width.takeIf { it > 0 } ?: entity.widthPx,
                                 heightPx = verdict.metadata.height.takeIf { it > 0 } ?: entity.heightPx,
-                                rotationDegrees = verdict.metadata.rotationDegrees,
+                                // A verdict read from the file's own movie header knows the
+                                // duration and nothing else; the row's rotation is then the
+                                // better figure.
+                                rotationDegrees = if (verdict.metadata.width > 0) verdict.metadata.rotationDegrees else entity.rotationDegrees,
                             ),
                         )
                         repairedIncomplete++
@@ -196,7 +199,8 @@ class StorageReconciler(
                         if (adopted != null) adoptedFiles++
                     }
 
-                    // Whole but not describable right now: left in place, to be adopted next time.
+                    // Whole, but neither the platform nor the file's own header states a
+                    // duration right now: left in place, to be adopted next time.
                     is Mp4Verdict.IndexedButUnread -> notes += "${file.name}: unindexed, ${verdict.summary}; left for the next start"
 
                     else -> {
