@@ -47,8 +47,25 @@ import kotlinx.coroutines.flow.asStateFlow
  * And when the platform provides both virtual sensors, the raw accelerometer is not registered at
  * all: gravity arrives directly, so the raw stream would be a third 100 Hz stream delivered only
  * to be thrown away.
+ *
+ * ### Watching a parked car
+ *
+ * [Mode.MotionWatch] serves the parked recorder, which only needs to notice the car moving off. It
+ * registers the raw accelerometer alone, at 25 Hz with a one-second batch: the platform's virtual
+ * sensors are fused from the gyroscope on phones that have one, and a gyroscope draws far more than
+ * an accelerometer. Gravity is derived in both modes the same way, from a filter whose time
+ * constant is set in seconds rather than in samples, so the slower rate changes nothing about it.
  */
 class EventSensorSource(context: Context) {
+
+    /** What the motion data is for, which decides the sensors and the rate. */
+    enum class Mode {
+        /** Impact and brake detection, and stillness while recording: 100 Hz, fused sensors preferred. */
+        Events,
+
+        /** A parked recorder watching for the car to move off: the raw accelerometer at 25 Hz. */
+        MotionWatch,
+    }
 
     private val sensorManager = context.getSystemService(SensorManager::class.java)
 
@@ -67,10 +84,12 @@ class EventSensorSource(context: Context) {
     // Touched only on the delivery thread while listening, and reset before registering.
     private val gravityEstimate = FloatArray(3)
     private var gravitySeeded = false
+    private var lastRawNanos = 0L
     private var latestLinear: FloatArray? = null
 
     @Volatile
     private var listening = false
+    private var mode = Mode.Events
     private var deliveryThread: HandlerThread? = null
 
     val hasGyroscope: Boolean get() = gyroscope != null
@@ -93,7 +112,7 @@ class EventSensorSource(context: Context) {
 
                 // Only registered when the virtual pair is not in use, so this is the whole signal.
                 Sensor.TYPE_ACCELEROMETER -> {
-                    updateDerivedGravity(event.values)
+                    updateDerivedGravity(event.values, event.timestamp)
                     latestLinear = floatArrayOf(
                         event.values[0] - gravityEstimate[0],
                         event.values[1] - gravityEstimate[1],
@@ -107,20 +126,33 @@ class EventSensorSource(context: Context) {
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
     }
 
-    fun start() {
+    /**
+     * Starts delivering [samples] in [mode]. Starting in the mode already running does nothing;
+     * starting in the other one switches over.
+     */
+    fun start(mode: Mode = Mode.Events) {
         val manager = sensorManager ?: return
-        if (listening) return
+        if (listening) {
+            if (this.mode == mode) return
+            stop()
+        }
+        this.mode = mode
         gravitySeeded = false
+        lastRawNanos = 0L
         latestLinear = null
         val thread = HandlerThread("roadguard-sensors").apply { start() }
         val handler = Handler(thread.looper)
+        val periodUs = if (mode == Mode.Events) SAMPLE_PERIOD_US else WATCH_SAMPLE_PERIOD_US
+        val latencyUs = if (mode == Mode.Events) MAX_REPORT_LATENCY_US else WATCH_MAX_REPORT_LATENCY_US
         fun register(sensor: Sensor): Boolean =
-            manager.registerListener(listener, sensor, SAMPLE_PERIOD_US, MAX_REPORT_LATENCY_US, handler)
+            manager.registerListener(listener, sensor, periodUs, latencyUs, handler)
 
         // Prefer the platform's virtual pair. Both or neither: linear acceleration without the
         // matching gravity would feed the detector a zero gravity vector for the whole session.
-        val linear = linearAcceleration
-        val gravity = gravitySensor
+        // Never while watching a parked car, where the gyroscope behind them would cost more than
+        // everything else that is running.
+        val linear = linearAcceleration.takeIf { mode == Mode.Events }
+        val gravity = gravitySensor.takeIf { mode == Mode.Events }
         val virtualPair = linear != null && gravity != null && register(linear) &&
             (register(gravity) || run { manager.unregisterListener(listener, linear); false })
         // Otherwise derive both from the raw accelerometer, which works with no gyroscope at all.
@@ -154,7 +186,9 @@ class EventSensorSource(context: Context) {
         _available.value = _available.value.copy(registered = false)
     }
 
-    private fun updateDerivedGravity(raw: FloatArray) {
+    private fun updateDerivedGravity(raw: FloatArray, timestampNanos: Long) {
+        val previousNanos = lastRawNanos
+        lastRawNanos = timestampNanos
         if (!gravitySeeded) {
             gravityEstimate[0] = raw[0]
             gravityEstimate[1] = raw[1]
@@ -162,9 +196,9 @@ class EventSensorSource(context: Context) {
             gravitySeeded = true
             return
         }
+        val smoothing = gravitySmoothing(timestampNanos - previousNanos)
         for (axis in 0..2) {
-            gravityEstimate[axis] =
-                GRAVITY_SMOOTHING * gravityEstimate[axis] + (1f - GRAVITY_SMOOTHING) * raw[axis]
+            gravityEstimate[axis] = smoothing * gravityEstimate[axis] + (1f - smoothing) * raw[axis]
         }
     }
 
@@ -205,13 +239,34 @@ class EventSensorSource(context: Context) {
          */
         const val MAX_REPORT_LATENCY_US = 250_000
 
+        /** 40 ms, i.e. 25 Hz: [Mode.MotionWatch]. A car pulling away shakes a phone for seconds. */
+        const val WATCH_SAMPLE_PERIOD_US = 40_000
+
         /**
-         * Low-pass coefficient for the derived gravity estimate.
-         *
-         * 0.98 at 100 Hz gives a time constant of roughly half a second: slow enough to ignore
-         * an impact, fast enough to follow the phone being re-seated in its cradle.
+         * One second of batching in [Mode.MotionWatch]: the parked watch judges whole seconds, so
+         * there is nothing to gain from hearing about them sooner.
          */
-        const val GRAVITY_SMOOTHING = 0.98f
+        const val WATCH_MAX_REPORT_LATENCY_US = 1_000_000
+
+        /**
+         * Time constant of the derived gravity estimate: half a second, slow enough to ignore an
+         * impact and fast enough to follow the phone being re-seated in its cradle.
+         *
+         * It used to be a fixed per-sample coefficient of 0.98, which is half a second only at
+         * exactly 100 Hz. A platform delivering more slowly than asked -- or the 25 Hz parked
+         * watch -- would have stretched it to two seconds and more.
+         */
+        const val GRAVITY_TIME_CONSTANT_NANOS = 500_000_000L
+
+        /**
+         * The low-pass coefficient for a sample [elapsedNanos] after the previous one: 0.98 at
+         * 100 Hz, about 0.93 at 25 Hz. A gap longer than the time constant mostly forgets the old
+         * estimate, as it should; a nonsensical interval keeps it unchanged.
+         */
+        fun gravitySmoothing(elapsedNanos: Long): Float {
+            if (elapsedNanos <= 0L) return 1f
+            return (GRAVITY_TIME_CONSTANT_NANOS.toDouble() / (GRAVITY_TIME_CONSTANT_NANOS + elapsedNanos)).toFloat()
+        }
     }
 }
 

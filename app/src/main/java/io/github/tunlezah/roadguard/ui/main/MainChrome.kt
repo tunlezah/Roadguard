@@ -172,6 +172,13 @@ private fun RecordingStatusChip(state: MainUiState) {
             contentDescription = "Not recording",
             contentColour = status.idle,
         )
+
+        RecorderStatus.Parked -> StatusChip(
+            text = "Parked",
+            iconRes = R.drawable.ic_local_parking,
+            contentDescription = "Parked: recording is paused and resumes when the car moves",
+            contentColour = status.idle,
+        )
     }
 }
 
@@ -290,8 +297,11 @@ fun MainControlBar(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         // Stop for every state in which a session is running -- including the start-up countdown
-        // and while reconnecting -- because in all of them the user's intent is "recording".
-        if (state.recording.isSessionActive) {
+        // and while reconnecting -- because in all of them the user's intent is "recording". Parked
+        // is the exception: nothing is recording, so the main control resumes, and Stop moves to the
+        // wide button, which has nothing to protect while parked.
+        val parked = state.recording.status == RecorderStatus.Parked
+        if (state.recording.isSessionActive && !parked) {
             FilledIconButton(
                 onClick = onStopRecording,
                 colors = IconButtonDefaults.filledIconButtonColors(
@@ -310,18 +320,29 @@ fun MainControlBar(
                 ),
                 modifier = Modifier.size(48.dp),
             ) {
-                Icon(painterResource(R.drawable.ic_fiber_manual_record), contentDescription = "Start recording")
+                Icon(
+                    painterResource(R.drawable.ic_fiber_manual_record),
+                    contentDescription = if (parked) "Resume recording" else "Start recording",
+                )
             }
         }
 
-        FilledTonalButton(
-            onClick = onProtect,
-            enabled = state.recording.canProtect,
-            modifier = Modifier.weight(1f),
-        ) {
-            Icon(painterResource(R.drawable.ic_lock), contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(if (compact) "Protect" else "Protect recording")
+        if (parked) {
+            FilledTonalButton(onClick = onStopRecording, modifier = Modifier.weight(1f)) {
+                Icon(painterResource(R.drawable.ic_stop), contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(if (compact) "Stop" else "Stop recording")
+            }
+        } else {
+            FilledTonalButton(
+                onClick = onProtect,
+                enabled = state.recording.canProtect,
+                modifier = Modifier.weight(1f),
+            ) {
+                Icon(painterResource(R.drawable.ic_lock), contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(if (compact) "Protect" else "Protect recording")
+            }
         }
 
         IconButton(onClick = onOpenGallery, modifier = Modifier.size(48.dp)) {

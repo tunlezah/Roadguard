@@ -65,11 +65,12 @@ Two things are deliberately *not* affected:
 
 ### Recording stops on its own
 
-Only four things end a recording that you did not stop yourself:
+Only five things end a recording that you did not stop yourself:
 
 | Cause | What you will see | Fix |
 | --- | --- | --- |
 | The battery is nearly flat (3 % or less, not charging) | a "Roadguard stopped recording" alert naming the battery level | charge the phone. The last clip was closed cleanly before the phone could die mid-write |
+| The car stayed parked (Settings → Power → *Pause recording when parked*) | *Parked*, then after the watch period a silent "Recording stopped while parked" notification | nothing is wrong; tap the notification to record. See *Recording paused and the app says "Parked"* below |
 | A power-disconnect behaviour | recording stopped when you unplugged | see *Recording stopped when I unplugged* below |
 | Android killed the process | a "Recording was interrupted" notification | tap it to resume, then see *Recording stops when the screen turns off* below |
 | The phone was switched off | nothing to fix | the clip in progress was closed during shutdown |
@@ -80,6 +81,40 @@ card, frames that stop arriving — does **not** end the recording. Roadguard sh
 
 Heat is **not** on this list either. Roadguard never stops recording for thermal reasons — it
 reduces quality instead.
+
+### Recording paused and the app says "Parked"
+
+That is **Settings → Power → Pause recording when parked**, on by default. Once the car has not
+moved for ten minutes, Roadguard closes the current clip and releases the camera, GNSS and the
+screen's keep-awake, and the motion sensor alone watches for the car to move off. Recording comes
+back by itself, with no countdown, as soon as it does. Pressing **Record**, or connecting power
+when *When power is connected* is set to start recording, resumes it at once.
+
+If the car has not moved for a further 30 minutes, Roadguard switches off completely: the
+notification is replaced by a silent "Recording stopped while parked" one, and nothing of
+Roadguard runs. From then on recording does **not** come back by itself, because Android does not
+let an app start the camera from the background (see *Recording did not start on boot* below).
+Tap the notification, open the app, or connect power while it is open. This is not counted as
+your Stop, so the usual automatic starts still apply.
+
+Both times are adjustable in the same place, and the switch turns the whole thing off for anyone
+who wants an uninterrupted recording, such as a phone on permanent power watching a parked car.
+
+**It did not resume when I drove off.** It resumes on the phone being shaken the way a moving car
+shakes it *while it still sits the way it was parked*. If you took the phone out and put it back
+at a different angle, or left it lying on a seat, it will not — that is the rule that keeps it
+from recording the inside of your pocket. Press Record, or connect power. GNSS speed also
+resumes it, but only while something else has GNSS running (the app on screen, for instance):
+Roadguard does not run GNSS itself while parked.
+
+**It never pauses.** Diagnostics → *Parking* shows why. "Motion data: none" means the
+accelerometer is not delivering, and without it Roadguard never decides the car is still. A
+*Vibration* steadily above 0.10 m/s² — typically an engine left idling, or a mount that rattles —
+reads as a car that could be moving, and that is deliberate: pausing a recording that should
+have carried on is the worse mistake. *Last movement* names what last restarted the count: the
+motion sensor, GNSS speed, or a GNSS position more than drift explains. These thresholds have not
+been measured in a car yet (`docs/testing.md` §5.6); the figures Diagnostics shows are exactly
+what would tune them.
 
 ### The battery went flat while recording
 

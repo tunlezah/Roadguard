@@ -42,6 +42,13 @@ import io.github.tunlezah.roadguard.location.LocationState
 import io.github.tunlezah.roadguard.location.TrackRecorder
 import io.github.tunlezah.roadguard.overlay.OverlayComposer
 import io.github.tunlezah.roadguard.overlay.VideoOverlayEffect
+import io.github.tunlezah.roadguard.parking.Direction
+import io.github.tunlezah.roadguard.parking.MotionMeter
+import io.github.tunlezah.roadguard.parking.MotionWindow
+import io.github.tunlezah.roadguard.parking.MovementWatch
+import io.github.tunlezah.roadguard.parking.ParkingFix
+import io.github.tunlezah.roadguard.parking.ParkingSnapshot
+import io.github.tunlezah.roadguard.parking.StillnessTracker
 import io.github.tunlezah.roadguard.power.BatterySafeGate
 import io.github.tunlezah.roadguard.power.PowerAction
 import io.github.tunlezah.roadguard.power.PowerMonitor
@@ -136,13 +143,14 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * ### Failure
  *
- * A session ends only when the user, the power policy or a nearly flat battery ends it.
- * Anything else that stops the frames -- the camera lost to another app, an encoder error, a full
- * or missing volume, frames that silently stop arriving -- moves the recorder to
- * [RecorderStatus.Recovering], and [RecoveryPolicy] brings it back: quick retries first, then a
- * slow cadence for as long as it takes, resuming at once when the camera reopens. The watchdog
- * exists for the failure that reports nothing at all, a recording whose frames just stop. A
- * camera configuration the device refuses falls back to a safe one instead of ending the session.
+ * A session ends only when the user, the power policy, a nearly flat battery or a long stay parked
+ * ([ParkingPolicy]) ends it. Anything else that stops the frames -- the camera lost to another
+ * app, an encoder error, a full or missing volume, frames that silently stop arriving -- moves the
+ * recorder to [RecorderStatus.Recovering], and [RecoveryPolicy] brings it back: quick retries
+ * first, then a slow cadence for as long as it takes, resuming at once when the camera reopens.
+ * The watchdog exists for the failure that reports nothing at all, a recording whose frames just
+ * stop. A camera configuration the device refuses falls back to a safe one instead of ending the
+ * session.
  *
  * ### Trips and tracks
  *
@@ -152,6 +160,16 @@ import java.util.concurrent.atomic.AtomicLong
  * on, every usable fix is offered to the [TrackRecorder], which writes the trip's track file.
  * Neither can touch the camera or the encoder: the trip is index rows and the track is a small
  * side file, and both are guarded so a failure in either leaves recording untouched.
+ *
+ * ### Parking
+ *
+ * While a session records, the accelerometer and GNSS feed a [StillnessTracker]. Once the vehicle
+ * has verifiably not moved for the configured time the session parks ([RecorderStatus.Parked]):
+ * the clip is finalised and the trip closed exactly as a stop would, and the camera, encoder and
+ * GNSS are released -- but the session and the recording service carry on, because only a service
+ * that is already running may reopen the camera without the app on screen. A [MovementWatch] on the
+ * low-power accelerometer then resumes recording the moment the vehicle moves off, and if it never
+ * does, the session ends once the watch period is over. [ParkingPolicy] decides; the tick acts.
  */
 class RecordingController(
     private val context: Context,
@@ -253,6 +271,25 @@ class RecordingController(
     private var rebindOnRecovery = false
     private var cameraBlocker: RecordingBlocker? = null
 
+    private val motionMeter = MotionMeter()
+
+    /** How long the vehicle has been still; replaced, fresh, whenever the sensors start for recording. */
+    private var stillness = StillnessTracker()
+
+    /** Non-null while parked and watching for the vehicle to move off. */
+    private var movementWatch: MovementWatch? = null
+
+    /** When the session parked, on the elapsed-realtime clock; null when not parked. */
+    private var parkedAtElapsedMs: Long? = null
+
+    /** The last fix offered to the parking logic, so a re-emitted state is not counted twice. */
+    private var lastParkingFixEpochMs: Long? = null
+
+    private val _parking = MutableStateFlow(ParkingSnapshot())
+
+    /** What the parking logic currently believes, for Diagnostics. Refreshed every tick. */
+    val parking: StateFlow<ParkingSnapshot> = _parking.asStateFlow()
+
     // ── Also read from the recorder's thread ──────────────────────────────────────────────────
 
     @Volatile
@@ -316,6 +353,7 @@ class RecordingController(
         closeActiveRecording()
         stateMutex.withLock {
             stopPeripherals()
+            forgetParking()
             closeTrip()
             unbindCamera()
             if (lifecycleOwner === detaching) lifecycleOwner = null
@@ -328,6 +366,7 @@ class RecordingController(
                         segmentStartedAtEpochMs = null,
                         startupCountdownSeconds = null,
                         batterySafe = false,
+                        parkedSinceEpochMs = null,
                     )
                 } else {
                     it.copy(batterySafe = false)
@@ -355,7 +394,7 @@ class RecordingController(
     // ── Public commands ───────────────────────────────────────────────────────────────────────
 
     /**
-     * Starts recording.
+     * Starts recording, or -- while parked -- resumes it.
      *
      * @param delaySeconds start-up delay, so the camera's exposure has settled and the phone is
      *   in its cradle before the first segment begins. Passed in rather than read here so the
@@ -375,9 +414,14 @@ class RecordingController(
      * that is itself a cancellable job (the power policy's delayed stop, say) can never cancel the
      * stop half-way by cancelling itself.
      */
-    private fun requestStop(status: RecorderStatus, message: String? = null, blocker: RecordingBlocker? = null) {
+    private fun requestStop(
+        status: RecorderStatus,
+        message: String? = null,
+        blocker: RecordingBlocker? = null,
+        endedWhileParked: Boolean = false,
+    ) {
         session.incrementAndGet()
-        scope.launch { stopInternal(status, message, blocker) }
+        scope.launch { stopInternal(status, message, blocker, endedWhileParked) }
     }
 
     /** Protects the current and preceding footage at the user's request. */
@@ -418,6 +462,7 @@ class RecordingController(
         withContext(dispatcher) {
             scheduledStopJob?.cancel()
             cancelRecoveryJob()
+            forgetParking()
             val hadRecording = closeActiveRecording()
             journal?.markStopped()
             if (hadRecording || liveSegments.isNotEmpty()) {
@@ -431,6 +476,7 @@ class RecordingController(
                         lastErrorMessage = "Recording stopped because the phone is shutting down",
                         segmentStartedAtEpochMs = null,
                         startupCountdownSeconds = null,
+                        parkedSinceEpochMs = null,
                     )
                 } else {
                     it
@@ -441,7 +487,17 @@ class RecordingController(
 
     // ── Start / stop ──────────────────────────────────────────────────────────────────────────
 
-    private suspend fun startInternal(token: Long, delaySecondsOverride: Int?) = stateMutex.withLock {
+    private suspend fun startInternal(token: Long, delaySecondsOverride: Int?) {
+        // Record pressed, or the app opened, while parked: the session is already running, so
+        // this is a resume rather than a refused second start.
+        if (_state.value.status == RecorderStatus.Parked) {
+            requestResume(token, delaySecondsOverride, "the driver asked to record")
+            return
+        }
+        beginSession(token, delaySecondsOverride)
+    }
+
+    private suspend fun beginSession(token: Long, delaySecondsOverride: Int?) = stateMutex.withLock {
         if (!isCurrent(token)) return@withLock
         if (_state.value.isSessionActive) return@withLock
         if (lifecycleOwner == null) {
@@ -476,6 +532,7 @@ class RecordingController(
                 lastErrorMessage = null,
                 sessionDurationMs = 0,
                 sessionSegmentCount = 0,
+                endedWhileParked = false,
             )
         }
         resetRecovery()
@@ -554,11 +611,20 @@ class RecordingController(
         }
     }
 
-    private suspend fun stopInternal(status: RecorderStatus, message: String?, blocker: RecordingBlocker?) {
+    private suspend fun stopInternal(
+        status: RecorderStatus,
+        message: String?,
+        blocker: RecordingBlocker?,
+        endedWhileParked: Boolean,
+    ) {
         stateMutex.withLock {
             scheduledStopJob?.cancel()
             scheduledStopJob = null
             resetRecovery()
+            // Only a stop that finds the session still parked has ended it for that reason: a Stop
+            // pressed meanwhile got there first and is the driver's own decision.
+            val parkedOut = endedWhileParked && _state.value.status == RecorderStatus.Parked
+            forgetParking()
             update { it.copy(status = RecorderStatus.Stopping, startupCountdownSeconds = null) }
             closeActiveRecording()
             // Let the recorder write the closing file's index while the camera is still bound; an
@@ -587,6 +653,8 @@ class RecordingController(
                     segmentStartedAtEpochMs = null,
                     segmentBytes = 0,
                     batterySafe = false,
+                    parkedSinceEpochMs = null,
+                    endedWhileParked = parkedOut,
                 )
             }
         }
@@ -755,7 +823,7 @@ class RecordingController(
         if (settings.locationEnabled) {
             locationEngine.request(LocationEngine.Client.Recorder, effectivePlan().locationIntervalMs)
         }
-        if (settings.eventDetectionEnabled) startSensors()
+        if (wantsMotionSensors(settings)) startSensors()
         overlayJob?.cancel()
         overlayJob = scope.launch {
             while (isActive) {
@@ -765,12 +833,23 @@ class RecordingController(
         }
     }
 
+    /** Impact detection and the parking stillness check both read the accelerometer. */
+    private fun wantsMotionSensors(settings: Settings): Boolean =
+        settings.eventDetectionEnabled || settings.pauseWhenParked
+
     private fun startSensors() {
         impactDetector = ImpactDetector(
             sensitivity = lastSettings.eventSensitivity,
             hasGyroscope = _capabilities.value?.sensors?.hasGyroscope ?: false,
         )
-        sensorSource.start()
+        // Stillness is only ever measured from the start of what is being observed now.
+        stillness = StillnessTracker()
+        motionMeter.reset()
+        listenToSensors(EventSensorSource.Mode.Events)
+    }
+
+    private fun listenToSensors(mode: EventSensorSource.Mode) {
+        sensorSource.start(mode)
         sensorJob?.cancel()
         sensorJob = scope.launch { sensorSource.samples.collect { sample -> onSensorSample(sample) } }
     }
@@ -1476,6 +1555,207 @@ class RecordingController(
         }
     }
 
+    // ── Parking ───────────────────────────────────────────────────────────────────────────────
+
+    /** Called every tick, and the moment the watch sees the vehicle move: does what parking needs. */
+    private fun reviewParking() {
+        val settings = lastSettings
+        val now = SystemClock.elapsedRealtime()
+        val watch = movementWatch
+        val action = ParkingPolicy.decide(
+            enabled = settings.pauseWhenParked,
+            status = _state.value.status,
+            stillForMs = stillness.stillForMs(now),
+            parkAfterMs = settings.parkAfterMinutes * MS_PER_MINUTE,
+            moving = watch?.isMoving == true,
+            parkedForMs = parkedAtElapsedMs?.let { now - it },
+            watchForMs = settings.parkedWatchMinutes * MS_PER_MINUTE,
+        )
+        when (action) {
+            ParkingAction.Park -> requestPark(now)
+            ParkingAction.Resume -> requestResume(
+                token = session.get(),
+                delaySeconds = 0,
+                why = watch?.movement?.describe() ?: "pausing when parked was switched off",
+            )
+
+            ParkingAction.Sleep -> sleepAfterParking(now)
+            ParkingAction.None -> Unit
+        }
+        publishParking(now)
+    }
+
+    /**
+     * Parks the session. It is [RecorderStatus.Parked] from this instant, so the tick cannot ask
+     * twice, and the token is bumped, so a rollover, recovery or segment start still in flight
+     * abandons at its next step. The teardown itself takes the mutex like any camera operation.
+     */
+    private fun requestPark(now: Long) {
+        val token = session.incrementAndGet()
+        Log.i(TAG, "the vehicle has not moved for ${stillness.stillForMs(now) / 1_000} s; pausing recording")
+        parkedAtElapsedMs = now
+        update {
+            it.copy(
+                status = RecorderStatus.Parked,
+                parkedSinceEpochMs = System.currentTimeMillis(),
+                segmentStartedAtEpochMs = null,
+                startupCountdownSeconds = null,
+                // Whatever was wrong with the camera or the storage, nothing is recording now.
+                blockers = emptyList(),
+                lastErrorMessage = null,
+            )
+        }
+        scope.launch { parkInternal(token) }
+    }
+
+    /**
+     * A stop's teardown that leaves the session running: the clip is finalised while the camera is
+     * still bound, the trip is closed and named, the camera, encoder and GNSS are let go. Then the
+     * low-power watch starts.
+     *
+     * It runs for as long as the parking is current, even if a resume has been asked for in the
+     * meantime, so that the resume starts from a clean slate rather than rebinding over a
+     * recording nobody closed.
+     */
+    private suspend fun parkInternal(token: Long) = stateMutex.withLock {
+        if (!isCurrent(token)) return@withLock
+        resetRecovery()
+        val pose = stillness.pose
+        closeActiveRecording()
+        if (!awaitFinalised(STOP_FINALIZE_TIMEOUT_MS)) {
+            Log.w(TAG, "recorder did not finalise within $STOP_FINALIZE_TIMEOUT_MS ms; parking anyway")
+        }
+        stopPeripherals()
+        closeTrip()
+        unbindCamera()
+        if (!awaitFinalised(UNBIND_FINALIZE_WAIT_MS)) {
+            liveSegments.clear()
+            publishUnfinalized()
+        }
+        update { it.copy(segmentBytes = 0) }
+        if (isCurrent(token) && _state.value.status == RecorderStatus.Parked) startMotionWatch(pose)
+    }
+
+    private fun startMotionWatch(pose: Direction?) {
+        if (pose == null) Log.w(TAG, "no parked pose was learned; only GNSS, power or the driver can resume")
+        motionMeter.reset()
+        movementWatch = MovementWatch(pose)
+        listenToSensors(EventSensorSource.Mode.MotionWatch)
+    }
+
+    /**
+     * Leaves [RecorderStatus.Parked] for recording. Like [requestPark], the state changes at once --
+     * to [RecorderStatus.Starting] -- so nothing asks twice; the camera work follows under the mutex.
+     *
+     * @param delaySeconds the start-up delay; null for the configured one. Zero when the vehicle is
+     *   already moving, because every second of countdown is a second of the drive not recorded.
+     */
+    private fun requestResume(token: Long, delaySeconds: Int?, why: String) {
+        if (!isCurrent(token) || _state.value.status != RecorderStatus.Parked) return
+        Log.i(TAG, "resuming after parking: $why")
+        endMotionWatch()
+        update { it.copy(status = RecorderStatus.Starting, parkedSinceEpochMs = null) }
+        scope.launch { resumeInternal(token, delaySeconds ?: lastSettings.startupDelaySeconds) }
+    }
+
+    /**
+     * Brings a parked session back: the camera bring-up of a start, without the checks that decide
+     * whether a session may *begin* -- this one began long ago, and the battery and storage have
+     * been watched all along. A failure from here on is a recovery like any other; it does not end
+     * the session.
+     */
+    private suspend fun resumeInternal(token: Long, delaySeconds: Int) = stateMutex.withLock {
+        if (!isCurrent(token) || _state.value.status != RecorderStatus.Starting) return@withLock
+        resetRecovery()
+        cameraBlocker = null
+        for (remaining in delaySeconds downTo 1) {
+            update { it.copy(startupCountdownSeconds = remaining) }
+            delay(1_000)
+            if (!isCurrent(token)) return@withLock abandonStart()
+        }
+        update { it.copy(startupCountdownSeconds = null) }
+        batterySafeGate.reset(PowerPolicy.batterySafe(powerMonitor.state.value, lastSettings))
+        update { it.copy(batterySafe = batterySafeGate.applied) }
+        onThermalReading(thermalSource.reading.value)
+        establish(token, rebind = true)
+    }
+
+    /**
+     * Parked for the whole watch period without moving: end the session the way a stop does, so the
+     * service stands down and nothing of Roadguard runs at all. The latch an explicit Stop sets is
+     * deliberately left alone, so opening the app -- or power arriving while it is open -- starts
+     * recording as usual next time.
+     */
+    private fun sleepAfterParking(now: Long) {
+        val parkedForMs = parkedAtElapsedMs?.let { now - it } ?: 0L
+        Log.i(TAG, "parked for ${parkedForMs / MS_PER_MINUTE} min without moving; switching off")
+        // Forgotten now rather than when the stop runs, so the next tick does not ask again.
+        forgetParking()
+        requestStop(RecorderStatus.Idle, endedWhileParked = true)
+    }
+
+    /** Stops watching: the low-power sensors stop and the parked bookkeeping is forgotten. */
+    private fun endMotionWatch() {
+        forgetParking()
+        stopSensors()
+    }
+
+    /** Forgets the parked bookkeeping. Which sensors run is the caller's business. */
+    private fun forgetParking() {
+        movementWatch = null
+        parkedAtElapsedMs = null
+    }
+
+    private fun onMotionWindow(window: MotionWindow) {
+        val now = SystemClock.elapsedRealtime()
+        val watch = movementWatch
+        if (watch == null) {
+            stillness.onWindow(window, now)
+            return
+        }
+        watch.onWindow(window, now)
+        // A car driving off is worth acting on this second, not at the next tick.
+        if (watch.isMoving) reviewParking()
+    }
+
+    /**
+     * Offers a fix to whichever parking check is running, once: the location state is re-published
+     * on every tick and satellite update, and a fix counted twice would confirm itself.
+     */
+    private fun offerParkingFix(location: LocationState) {
+        val fixEpochMs = location.fixEpochMs ?: return
+        if (fixEpochMs == lastParkingFixEpochMs) return
+        val latitude = location.latitude ?: return
+        val longitude = location.longitude ?: return
+        lastParkingFixEpochMs = fixEpochMs
+        val fix = ParkingFix(
+            atMs = SystemClock.elapsedRealtime(),
+            latitude = latitude,
+            longitude = longitude,
+            accuracyMetres = location.accuracyMetres,
+            speedMetresPerSecond = location.speedMetresPerSecond,
+        )
+        val watch = movementWatch
+        if (watch == null) {
+            stillness.onFix(fix)
+            return
+        }
+        watch.onFix(fix)
+        if (watch.isMoving) reviewParking()
+    }
+
+    private fun publishParking(now: Long) {
+        val watch = movementWatch
+        _parking.value = ParkingSnapshot(
+            observing = watch?.observing(now) ?: stillness.observing(now),
+            stillForMs = stillness.stillForMs(now),
+            vibration = if (watch != null) watch.lastVibration else stillness.lastVibration,
+            lastMovement = stillness.lastMovement,
+            parkedForMs = parkedAtElapsedMs?.let { now - it },
+            watching = watch != null,
+        )
+    }
+
     // ── Reactions ─────────────────────────────────────────────────────────────────────────────
 
     private suspend fun onSettings(settings: Settings) {
@@ -1497,8 +1777,17 @@ class RecordingController(
                     locationEngine.release(LocationEngine.Client.Recorder)
                 }
             }
-            if (settings.eventDetectionEnabled != previous.eventDetectionEnabled) {
-                if (settings.eventDetectionEnabled) startSensors() else stopSensors()
+            val sensorsWanted = wantsMotionSensors(settings)
+            if (sensorsWanted != wantsMotionSensors(previous)) {
+                if (sensorsWanted) startSensors() else stopSensors()
+            } else if (settings.eventDetectionEnabled && !previous.eventDetectionEnabled) {
+                // The sensors were already running for parking; detection starts from a clean slate.
+                impactDetector = ImpactDetector(
+                    sensitivity = settings.eventSensitivity,
+                    hasGyroscope = _capabilities.value?.sensors?.hasGyroscope ?: false,
+                )
+                brakeDetector.reset()
+                brakeLevel = null
             }
         }
         if (settings.recordingZoom != previous.recordingZoom && cameraSession.isBound) {
@@ -1624,6 +1913,14 @@ class RecordingController(
                 // a re-seated cable keeps the current session running.
                 scheduledStopJob?.cancel()
                 scheduledStopJob = null
+                // A parked car whose ignition has just come on is about to leave. Resume now rather
+                // than waiting for the motion to prove it -- but only for a driver who wants power
+                // to start recording.
+                if (_state.value.status == RecorderStatus.Parked &&
+                    PowerPolicy.onPowerConnected(settings) == PowerAction.StartRecording
+                ) {
+                    requestResume(session.get(), delaySeconds = 0, why = "power was connected")
+                }
                 // Starting a *new* session on power is owned by MainActivity, which only does it
                 // while the app is visible (the one time a camera service may be promoted) and
                 // honours an explicit Stop. Doing it here as well would need the service to linger
@@ -1731,6 +2028,11 @@ class RecordingController(
     }
 
     private fun onSensorSample(sample: SensorSample) {
+        val watching = movementWatch != null
+        motionMeter.accept(sample)?.let(::onMotionWindow)
+        // A parked recorder's low-power stream is too slow for impact detection, and nothing is
+        // being recorded that a detection could protect.
+        if (watching || _state.value.status == RecorderStatus.Parked) return
         if (!lastSettings.eventDetectionEnabled) return
         brakeDetector.onSample(sample)
         val detected = impactDetector.onSample(sample) { motionContext() } ?: return
@@ -1762,6 +2064,7 @@ class RecordingController(
         // The track recorder filters and deduplicates for itself; this is a cheap volatile read
         // when no track is open, which is the case between sessions.
         if (trackRecorder.isOpen) trackRecorder.accept(location)
+        offerParkingFix(location)
         val speed = location.speedMetresPerSecond
         if (speed == null) {
             if (lastBrakeFixEpochMs != null) {
@@ -1812,6 +2115,7 @@ class RecordingController(
             refreshBrakeLevel()
             reviewRecovery()
             reviewBatterySafe()
+            reviewParking()
             pruneAbandonedSegments()
             delay(TICK_MS)
         }
@@ -1970,8 +2274,10 @@ class RecordingController(
         /** Overlay content is regenerated once a second; the clock is the fastest field. */
         const val OVERLAY_UPDATE_MS = 1_000L
 
-        /** Cadence for staleness housekeeping (GNSS age, held speed expiry, recovery review). */
+        /** Cadence for staleness housekeeping (GNSS age, held speed expiry, recovery review, parking). */
         const val TICK_MS = 1_000L
+
+        private const val MS_PER_MINUTE = 60_000L
 
         /** How long a protection confirmation stays on screen. */
         const val PROTECT_MESSAGE_MS = 4_000L

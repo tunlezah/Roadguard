@@ -20,7 +20,9 @@ import io.github.tunlezah.roadguard.ui.MainActivity
  *
  * Alerts interrupt only for things a driver would want to know at the next set of lights:
  * recording that has been interrupted for more than a moment, recording that stopped without
- * being asked to, and a recording Android cut short that can be resumed with a tap.
+ * being asked to, and a recording Android cut short that can be resumed with a tap. A session that
+ * switched itself off because the car stayed parked is told too, but silently: nothing went wrong,
+ * the driver just needs to know recording will not come back by itself.
  *
  * ### Cost
  *
@@ -40,7 +42,7 @@ class RecordingNotifications(private val context: Context) {
     private val startIntent: PendingIntent by lazy { servicePendingIntent(RecordingService.ACTION_START, REQUEST_START) }
 
     /** The actions a notification offers. */
-    enum class Actions { ProtectAndStop, StopOnly, Record, None }
+    enum class Actions { ProtectAndStop, StopOnly, Record, RecordAndStop, None }
 
     /**
      * Everything the ongoing notification shows. A value type, so the service can tell a real
@@ -101,6 +103,11 @@ class RecordingNotifications(private val context: Context) {
 
             Actions.StopOnly -> builder.addAction(R.drawable.ic_stop, "Stop", stopIntent)
             Actions.Record -> builder.addAction(R.drawable.ic_fiber_manual_record, "Record", startIntent)
+            // Parked: record now rather than waiting for the car to move, or end the session.
+            Actions.RecordAndStop -> {
+                builder.addAction(R.drawable.ic_fiber_manual_record, "Record", startIntent)
+                builder.addAction(R.drawable.ic_stop, "Stop", stopIntent)
+            }
             Actions.None -> Unit
         }
         return builder.build()
@@ -138,6 +145,27 @@ class RecordingNotifications(private val context: Context) {
             .addAction(R.drawable.ic_fiber_manual_record, "Resume recording", resumeIntent)
             .build()
         runCatching { manager?.notify(NOTIFICATION_RESUME, notification) }
+    }
+
+    /**
+     * The car stayed parked for the whole watch period, so the session ended and the service with
+     * it. Silent, because nothing is wrong -- but recording will not come back by itself now, so
+     * the driver is told, and one tap opens the app recording again (a visible app may start the
+     * camera; a notification action on its own may not).
+     */
+    fun notifyStoppedWhileParked(parkedMinutes: Int) {
+        val message = parkedStopMessage(parkedMinutes)
+        val notification = NotificationCompat.Builder(context, CHANNEL_ALERTS)
+            .setSmallIcon(R.drawable.ic_local_parking)
+            .setContentTitle(PARKED_STOP_TITLE)
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setSilent(true)
+            .setAutoCancel(true)
+            .setContentIntent(resumeIntent)
+            .addAction(R.drawable.ic_fiber_manual_record, "Record", resumeIntent)
+            .build()
+        runCatching { manager?.notify(NOTIFICATION_PARKED, notification) }
     }
 
     fun notifyAlert(id: Int, title: String, message: String) {
@@ -184,12 +212,20 @@ class RecordingNotifications(private val context: Context) {
         const val NOTIFICATION_RESUME = 1004
         const val NOTIFICATION_INTERRUPTED = 1005
         const val NOTIFICATION_STOPPED = 1006
+        const val NOTIFICATION_PARKED = 1007
 
         private const val REQUEST_OPEN = 1
         private const val REQUEST_STOP = 2
         private const val REQUEST_PROTECT = 3
         private const val REQUEST_START = 4
         private const val REQUEST_RESUME = 5
+
+        const val PARKED_STOP_TITLE = "Recording stopped while parked"
+
+        /** What the driver reads when a parked session has switched itself off. */
+        fun parkedStopMessage(parkedMinutes: Int): String =
+            "The car had not moved for $parkedMinutes minutes, so Roadguard switched off to save " +
+                "battery. It will not start again by itself. Tap to record."
 
         /**
          * What the ongoing notification should say for [state]. Pure, so what the driver is told
@@ -203,9 +239,15 @@ class RecordingNotifications(private val context: Context) {
                 RecorderStatus.Stopping -> "Roadguard is stopping"
                 RecorderStatus.Failed -> "Roadguard has stopped recording"
                 RecorderStatus.Idle -> "Roadguard is not recording"
+                RecorderStatus.Parked -> "Roadguard is parked"
             }
             val detail = buildList {
-                state.profile?.let { add(it.label) }
+                // While parked nothing is being recorded, so the profile would only mislead.
+                if (state.status == RecorderStatus.Parked) {
+                    add("Recording paused. It resumes when the car moves")
+                } else {
+                    state.profile?.let { add(it.label) }
+                }
                 storageSummary?.let { add(it) }
                 if (state.thermalLevel != ThermalLevel.Normal) add("Temperature: ${state.thermalLevel.label}")
                 if (state.batterySafe) add("Battery-safe mode")
@@ -216,9 +258,11 @@ class RecordingNotifications(private val context: Context) {
                 RecorderStatus.Recording, RecorderStatus.RollingOver -> R.drawable.ic_fiber_manual_record
                 RecorderStatus.Recovering -> R.drawable.ic_warning
                 RecorderStatus.Failed -> R.drawable.ic_error
+                RecorderStatus.Parked -> R.drawable.ic_local_parking
                 RecorderStatus.Starting, RecorderStatus.Stopping, RecorderStatus.Idle -> R.drawable.ic_videocam
             }
             val actions = when {
+                state.status == RecorderStatus.Parked -> Actions.RecordAndStop
                 state.canProtect -> Actions.ProtectAndStop
                 state.isSessionActive -> Actions.StopOnly
                 state.status == RecorderStatus.Idle || state.status == RecorderStatus.Failed -> Actions.Record

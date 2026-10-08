@@ -30,7 +30,7 @@ ICONS = [
     "cloud", "cloud_off", "content_copy", "contrast", "delete_sweep", "device_thermostat",
     "download_for_offline", "error", "error_outline", "fiber_manual_record", "flip_camera_android", "folder",
     "fullscreen", "gps_fixed", "gps_not_fixed", "gps_off", "hd", "help_outline",
-    "high_quality", "history", "location_searching", "lock", "lock_open", "map",
+    "high_quality", "history", "local_parking", "location_searching", "lock", "lock_open", "map",
     "mic", "mic_off", "more_horiz", "movie", "my_location", "near_me",
     "nights_stay", "north", "notifications_active", "palette", "pause", "pin_drop",
     "power_off", "privacy_tip", "report_problem", "restore", "route", "schedule", "screen_lock_portrait",

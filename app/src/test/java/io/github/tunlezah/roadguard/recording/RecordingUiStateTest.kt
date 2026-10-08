@@ -28,6 +28,8 @@ class RecordingUiStateTest {
             RecorderStatus.Recovering to true,
             RecorderStatus.Stopping to true,
             RecorderStatus.Failed to false,
+            // The parked watch needs the CPU awake to see the car move off; it is bounded.
+            RecorderStatus.Parked to true,
         )
         assertThat(expected.keys).containsExactlyElementsIn(RecorderStatus.entries)
         for ((status, holds) in expected) {
@@ -58,14 +60,23 @@ class RecordingUiStateTest {
     }
 
     @Test
-    fun `a session is active while starting, recording and reconnecting`() {
+    fun `a session is active while starting, recording, reconnecting and parked`() {
         val active = RecorderStatus.entries.filter { state(it).isSessionActive }
         assertThat(active).containsExactly(
             RecorderStatus.Starting,
             RecorderStatus.Recording,
             RecorderStatus.RollingOver,
             RecorderStatus.Recovering,
+            RecorderStatus.Parked,
         )
+    }
+
+    @Test
+    fun `parked is a session that is neither recording nor anything to protect`() {
+        val parked = state(RecorderStatus.Parked)
+        assertThat(parked.isSessionActive).isTrue()
+        assertThat(parked.isRecording).isFalse()
+        assertThat(parked.canProtect).isFalse()
     }
 
     @Test

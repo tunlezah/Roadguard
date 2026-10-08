@@ -39,6 +39,7 @@ of Roadguard's defaults come from**.
 | Four themes | Light, Dark, System, OLED-black |
 | Power-event actions | start on power connected; four choices on disconnect |
 | Battery-safe threshold | reduce work below 15 % |
+| Pause when parked | **on by default**: pauses after 10 min verifiably still, resumes by itself on moving off, switches off after a further 30 min; see `docs/architecture.md` §3.4 |
 | Microphone recording | **off by default**, permission requested only when enabled |
 | Preview zoom | display-only, 1.0×–2.0×, default Auto |
 | Recording zoom | separate, default 1.0×, warns about lost field of view |
@@ -50,7 +51,7 @@ of Roadguard's defaults come from**.
 | --- | --- |
 | **Cloud upload / backup / accounts** | Forbidden by the specification, and structurally absent — there is no upload code to disable. See `docs/privacy.md` |
 | **Analytics, crash reporting, telemetry** | Same. CI fails the build if such a dependency appears |
-| **Parking mode** | Requires the phone to wake on motion with the screen off and the app not running. On targetSdk 35+ there is no reliable way to start a camera foreground service from a background trigger (`docs/research/android-platform-restrictions.md`), so a "parking mode" would be a feature that silently does not work. Shipping nothing beats shipping a promise |
+| **Parking mode** (recording a parked car) | Not to be confused with *pausing* while parked, which is implemented. Recording a parked car's surroundings requires the phone to wake on motion with the screen off and the app not running. On targetSdk 35+ there is no reliable way to start a camera foreground service from a background trigger (`docs/research/android-platform-restrictions.md`), so a "parking mode" would be a feature that silently does not work. Shipping nothing beats shipping a promise |
 | **Auto-start on boot** | Same root cause. §1.4 of `docs/research.md`: the camera grant is latched from a *visible* Activity |
 | **Speed-camera or red-light alerts** | Needs a maintained database Roadguard has no lawful, free, offline source for. An out-of-date alert is worse than none |
 | **Lane-departure / forward-collision warning** | A real-time vision model on a Mali-G57 MP1, competing with the encoder for bandwidth, would put recording reliability at risk for a feature that would not work well. Priority 1 is recording |
@@ -131,6 +132,9 @@ Storage screen reports a *measured* rate instead.
 | On power disconnected | Keep recording | reasoned: a loose cable must not end a recording. Three alternatives offered |
 | Stop delay | 300 s | reasoned |
 | Battery-safe below | 15 % | reasoned: matches Android's own low-battery point |
+| Pause when parked | On | product owner's decision: a parked car's footage is rarely worth a battery and a loop's worth of storage |
+| Pause after | 10 min still | product owner's decision; never below 5 min, so a long red light or a level crossing cannot pause a recording |
+| Watch for movement | 30 min | product owner's decision; capped at an hour because the watch holds a wake lock. The stillness and movement thresholds are reasoned, unmeasured starting points, see `docs/architecture.md` §3.4 |
 | Map follows vehicle | On | reasoned |
 | North-up | Off | reasoned: heading-up is easier to read while driving |
 | Auto-download map | On | specification (§16–18) — *"Do NOT assume the user will add map files"* |

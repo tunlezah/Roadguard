@@ -243,6 +243,7 @@ class RoadguardContainer(private val appContext: Context) {
             events = database.events(),
             reconcileReport = { lastReconcileReport },
             reconcileAtEpochMs = { lastReconcileAtEpochMs },
+            settings = { settingsSnapshot() },
         )
     }
 

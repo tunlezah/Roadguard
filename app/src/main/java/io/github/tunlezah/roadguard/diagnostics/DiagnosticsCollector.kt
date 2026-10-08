@@ -2,6 +2,7 @@ package io.github.tunlezah.roadguard.diagnostics
 
 import android.content.Context
 import android.os.Build
+import android.os.SystemClock
 import io.github.tunlezah.roadguard.camera.CameraOrientationTracker
 import io.github.tunlezah.roadguard.capability.CameraCapability
 import io.github.tunlezah.roadguard.data.EventDao
@@ -11,7 +12,9 @@ import io.github.tunlezah.roadguard.location.LocationEngine
 import io.github.tunlezah.roadguard.map.MapInstallState
 import io.github.tunlezah.roadguard.map.MapRepository
 import io.github.tunlezah.roadguard.power.PowerMonitor
+import io.github.tunlezah.roadguard.recording.RecorderStatus
 import io.github.tunlezah.roadguard.recording.RecordingController
+import io.github.tunlezah.roadguard.settings.Settings
 import io.github.tunlezah.roadguard.storage.StorageManager
 import io.github.tunlezah.roadguard.storage.Mp4Inspector
 import io.github.tunlezah.roadguard.storage.ReconcileReport
@@ -49,6 +52,7 @@ class DiagnosticsCollector(
     private val events: EventDao,
     private val reconcileReport: () -> ReconcileReport?,
     private val reconcileAtEpochMs: () -> Long?,
+    private val settings: () -> Settings = { Settings() },
 ) {
 
     suspend fun collect(): DiagnosticsSnapshot = withContext(Dispatchers.IO) {
@@ -60,6 +64,7 @@ class DiagnosticsCollector(
                 deviceSection(),
                 cameraSection(),
                 recordingSection(),
+                parkingSection(),
                 thermalSection(),
                 storageSection(),
                 reconciliationSection(),
@@ -272,6 +277,69 @@ class DiagnosticsCollector(
                 state.lastErrorMessage?.let {
                     add(DiagnosticsEntry("Last error", it, severity = EntrySeverity.Error))
                 }
+            },
+        )
+    }
+
+    /**
+     * Why the recording has or has not paused for parking. Every threshold behind it is reasoned,
+     * not measured, so the live evidence is what makes them tunable on a real phone.
+     */
+    private fun parkingSection(): DiagnosticsSection {
+        val settings = settings()
+        val parking = recordingController.parking.value
+        val state = recordingController.state.value
+        val now = SystemClock.elapsedRealtime()
+        return DiagnosticsSection(
+            "Parking",
+            buildList {
+                add(
+                    DiagnosticsEntry(
+                        "Pause when parked",
+                        if (settings.pauseWhenParked) {
+                            "after ${settings.parkAfterMinutes} min still, then watches for " +
+                                "${settings.parkedWatchMinutes} min"
+                        } else {
+                            "off"
+                        },
+                    ),
+                )
+                val needsData = settings.pauseWhenParked && state.isSessionActive
+                add(
+                    DiagnosticsEntry(
+                        "Motion data",
+                        when {
+                            parking.observing && parking.watching -> "arriving (low-power watch)"
+                            parking.observing -> "arriving"
+                            else -> "none - without it the vehicle is never judged to be still"
+                        },
+                        Provenance.Measured,
+                        if (parking.observing || !needsData) EntrySeverity.Normal else EntrySeverity.Warning,
+                    ),
+                )
+                parking.vibration?.let {
+                    add(DiagnosticsEntry("Vibration", String.format(Locale.ROOT, "%.3f m/s²", it), Provenance.Measured))
+                }
+                if (state.isRecording || state.status == RecorderStatus.Recovering) {
+                    add(DiagnosticsEntry("Still for", formatElapsed(parking.stillForMs), Provenance.Measured))
+                }
+                parking.lastMovement?.let {
+                    add(
+                        DiagnosticsEntry(
+                            "Last movement",
+                            "${it.describe()}, ${formatElapsed(now - it.atMs)} ago",
+                            Provenance.Measured,
+                        ),
+                    )
+                }
+                parking.parkedForMs?.let { add(DiagnosticsEntry("Parked for", formatElapsed(it), Provenance.Measured)) }
+                add(
+                    DiagnosticsEntry(
+                        "Thresholds",
+                        "reasoned starting points, not yet measured in a car",
+                        Provenance.Inferred,
+                    ),
+                )
             },
         )
     }
@@ -660,6 +728,12 @@ class DiagnosticsCollector(
         val hours = seconds / 3600
         val minutes = (seconds % 3600) / 60
         return if (hours > 0) "${hours}h ${minutes}m" else "${minutes}m"
+    }
+
+    /** Like [formatDuration], but to the second while under an hour: stillness is counted in seconds. */
+    private fun formatElapsed(milliseconds: Long): String {
+        val seconds = milliseconds.coerceAtLeast(0L) / 1000
+        return if (seconds >= 3600) formatDuration(seconds) else "${seconds / 60}m ${seconds % 60}s"
     }
 
     private companion object {

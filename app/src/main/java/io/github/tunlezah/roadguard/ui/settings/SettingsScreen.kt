@@ -32,6 +32,9 @@ import io.github.tunlezah.roadguard.settings.FrameRateSetting
 import io.github.tunlezah.roadguard.settings.GpsStorageMode
 import io.github.tunlezah.roadguard.settings.LoopBudget
 import io.github.tunlezah.roadguard.settings.OrientationMode
+import io.github.tunlezah.roadguard.settings.PARKED_WATCH_MINUTES_RANGE
+import io.github.tunlezah.roadguard.settings.PARKED_WATCH_STEP_MINUTES
+import io.github.tunlezah.roadguard.settings.PARK_AFTER_MINUTES_RANGE
 import io.github.tunlezah.roadguard.settings.POST_EVENT_OPTIONS
 import io.github.tunlezah.roadguard.settings.PRE_EVENT_OPTIONS
 import io.github.tunlezah.roadguard.settings.PowerConnectedAction
@@ -454,6 +457,44 @@ fun SettingsScreen(
                     "Below 3% Roadguard stops recording regardless, so the last clip is closed " +
                         "cleanly instead of being cut off by the phone powering down.",
                 )
+                SettingsSwitchRow(
+                    title = "Pause recording when parked",
+                    subtitle = "Once the motion sensor, and GPS when it has a fix, agree the car " +
+                        "has not moved. Recording resumes by itself when it does.",
+                    iconRes = R.drawable.ic_local_parking,
+                    checked = settings.pauseWhenParked,
+                    onCheckedChange = { on -> viewModel.update { it.copy(pauseWhenParked = on) } },
+                )
+                if (settings.pauseWhenParked) {
+                    SettingsSliderRow(
+                        title = "Pause after the car has been still for",
+                        valueLabel = "${settings.parkAfterMinutes} min",
+                        value = settings.parkAfterMinutes.toFloat(),
+                        range = PARK_AFTER_MINUTES_RANGE.first.toFloat()..PARK_AFTER_MINUTES_RANGE.last.toFloat(),
+                        steps = PARK_AFTER_MINUTES_RANGE.last - PARK_AFTER_MINUTES_RANGE.first - 1,
+                        onValueChange = { value ->
+                            viewModel.update { it.copy(parkAfterMinutes = value.roundToInt()) }
+                        },
+                    )
+                    SettingsSliderRow(
+                        title = "Then watch for movement for",
+                        valueLabel = "${settings.parkedWatchMinutes} min",
+                        value = settings.parkedWatchMinutes.toFloat(),
+                        range = PARKED_WATCH_MINUTES_RANGE.first.toFloat()..PARKED_WATCH_MINUTES_RANGE.last.toFloat(),
+                        steps = (PARKED_WATCH_MINUTES_RANGE.last - PARKED_WATCH_MINUTES_RANGE.first) /
+                            PARKED_WATCH_STEP_MINUTES - 1,
+                        onValueChange = { value ->
+                            viewModel.update { it.copy(parkedWatchMinutes = value.roundToInt()) }
+                        },
+                    )
+                    SettingsNote(
+                        "While paused, recording's camera and GPS are released, the screen may " +
+                            "sleep, and only the motion sensor keeps watching. If the car has not " +
+                            "moved by the end of the watch, Roadguard " +
+                            "switches off completely and will not start again by itself: open the " +
+                            "app, connect power while it is open, or tap its notification.",
+                    )
+                }
             }
 
             // ── Weather ───────────────────────────────────────────────────────────────────────

@@ -21,12 +21,21 @@ enum class RecorderStatus(val label: String) {
      * A recording session is running but nothing is being written at this moment: the camera was
      * lost to another app or an error, the encoder failed, frames stopped arriving, or storage ran
      * out. Roadguard is bringing the recorder back, and keeps trying for as long as the session
-     * lasts -- only the user, the power policy or a flat battery ends a session.
+     * lasts -- only the user, the power policy, a flat battery or a long stay parked ends a
+     * session.
      */
     Recovering("Reconnecting"),
 
     /** Recording is stopping at the user's or the power policy's request. */
     Stopping("Stopping"),
+
+    /**
+     * The vehicle has been verifiably still for a while, so recording has paused: the last clip is
+     * finalised and the camera, encoder and GNSS are released. The session itself carries on, so the
+     * recording service keeps its camera grant, and recording resumes by itself the moment the
+     * vehicle moves off. After the watch period it ends instead -- see [ParkingPolicy].
+     */
+    Parked("Parked"),
 
     /**
      * Recording has stopped and will not restart by itself: the battery is nearly flat, a
@@ -123,6 +132,16 @@ data class RecordingUiState(
 
     /** Battery-safe mode is shaping the recording; see [io.github.tunlezah.roadguard.power.PowerPolicy.batterySafe]. */
     val batterySafe: Boolean = false,
+
+    /** While [RecorderStatus.Parked]: when the recording paused, on the wall clock. */
+    val parkedSinceEpochMs: Long? = null,
+
+    /**
+     * The last session ended by itself because the vehicle stayed parked for the whole watch
+     * period. Not an error, but the driver should still be told, because recording will not come
+     * back on its own. Cleared when a session starts.
+     */
+    val endedWhileParked: Boolean = false,
 ) {
     /** Frames are being written right now. */
     val isRecording: Boolean
@@ -131,10 +150,13 @@ data class RecordingUiState(
     /**
      * A recording session the user (or the power policy) started is still in progress, whether
      * or not frames are being written this instant. Stop is the right control, and a second start
-     * must be refused rather than stacked on top.
+     * must be refused rather than stacked on top -- except while parked, where a start resumes.
      */
     val isSessionActive: Boolean
-        get() = status == RecorderStatus.Starting || isRecording || status == RecorderStatus.Recovering
+        get() = status == RecorderStatus.Starting ||
+            isRecording ||
+            status == RecorderStatus.Recovering ||
+            status == RecorderStatus.Parked
 
     /**
      * Protect is offered whenever there is footage from this session to protect -- including while
@@ -150,6 +172,10 @@ data class RecordingUiState(
      * encoder holds a wake lock of its own, so releasing any earlier -- at "Stopping", say, which
      * is how a low-battery or power-off stop usually happens with the screen off -- can leave the
      * final segment without its index when the phone dies moments later.
+     *
+     * Parked holds it too, for the watch period only: the accelerometer cannot see the vehicle
+     * move off while the CPU sleeps. That is the price of resuming by itself, and it is bounded --
+     * the watch ends the session, and the wake lock with it.
      */
     val holdsWakeLock: Boolean
         get() = unfinalizedSegments > 0 || when (status) {
@@ -157,6 +183,7 @@ data class RecordingUiState(
             RecorderStatus.Recording,
             RecorderStatus.RollingOver,
             RecorderStatus.Stopping,
+            RecorderStatus.Parked,
             -> true
 
             RecorderStatus.Recovering -> !recoveryIdle

@@ -84,6 +84,23 @@ data class Settings(
     val powerDisconnectStopDelaySeconds: Int = 300,
     val batterySafeThresholdPercent: Int = 15,
 
+    /**
+     * Pause recording once the vehicle has verifiably not moved for [parkAfterMinutes], and resume
+     * by itself when it moves off again. On by default at the product owner's request: footage of a
+     * stationary car is rarely worth a battery and a loop's worth of storage. See
+     * [io.github.tunlezah.roadguard.recording.ParkingPolicy].
+     */
+    val pauseWhenParked: Boolean = true,
+
+    /** How long the vehicle must be still before recording pauses. */
+    val parkAfterMinutes: Int = 10,
+
+    /**
+     * How long a paused recording keeps watching for the vehicle to move before Roadguard switches
+     * off altogether. Bounded, because watching holds a wake lock.
+     */
+    val parkedWatchMinutes: Int = 30,
+
     // ── Weather (optional; see docs/research/weather-australia.md) ─────────────────
     val weatherEnabled: Boolean = false,
 
@@ -237,3 +254,19 @@ val POST_EVENT_OPTIONS: List<Int> = listOf(30, 60, 90, 120)
 
 /** Startup delay bounds, in seconds. */
 val STARTUP_DELAY_RANGE: IntRange = 0..30
+
+/**
+ * How long a vehicle must be still before recording pauses, in minutes. Not below five: a long red
+ * light or a level crossing must never pause a recording, because resuming takes seconds and the
+ * moment of pulling away is exactly what a dashcam is for.
+ */
+val PARK_AFTER_MINUTES_RANGE: IntRange = 5..30
+
+/**
+ * How long a parked recording watches for movement, in minutes. Capped at an hour, because the
+ * watch holds a wake lock.
+ */
+val PARKED_WATCH_MINUTES_RANGE: IntRange = 5..60
+
+/** The watch period is offered in steps of this many minutes. */
+const val PARKED_WATCH_STEP_MINUTES: Int = 5

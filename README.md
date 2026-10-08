@@ -27,7 +27,7 @@ It has no accounts, no cloud, no analytics and no telemetry. Everything stays on
 
 > ### Status: complete and building; **never run on a device**
 >
-> The application is fully implemented, 675 automated tests pass, Android Lint is clean and both
+> The application is fully implemented, 744 automated tests pass, Android Lint is clean and both
 > APKs build and verify. **It has never been installed on a phone or an emulator** — no device was
 > available. So there are no screenshots, no measured benchmarks and no physical thermal
 > validation, and this README does not pretend otherwise. [What is and is not
@@ -51,13 +51,21 @@ It has no accounts, no cloud, no analytics and no telemetry. Everything stays on
 - **Recording does not give up.** If another app takes the camera, the encoder fails, frames stop
   arriving or the memory card goes missing, Roadguard shows *Reconnecting* and keeps retrying —
   quickly at first, then once a minute — for as long as the session lasts, and resumes the moment
-  the camera is back. Only Stop, your power settings or a nearly flat battery end a recording. A
-  configuration the camera refuses falls back to 720p30 or 480p30 instead of failing.
+  the camera is back. Only Stop, your power settings, a nearly flat battery or a long stay parked
+  end a recording. A configuration the camera refuses falls back to 720p30 or 480p30 instead of
+  failing.
 - **The last clip is looked after.** Switching the phone off closes the current clip first, and if
   Android kills the app mid-drive, a notification offers to resume recording with one tap.
 - **Battery-safe mode** when Battery Saver is on, at a low-battery threshold, or on unplugging if
   you choose: the screen may sleep, the map stops animating, and recording drops to 720p30 without
   stabilisation. Never while charging, and never in the middle of a clip.
+- **Pauses when parked.** Once the motion sensor shows the car has not moved for ten minutes — and
+  GPS, when it has a fix, agrees: no speed, and no position change beyond what drift explains —
+  the clip is closed, the camera and GPS are released and the screen may sleep. Recording resumes
+  by itself, with no countdown, the moment the car moves off with the phone still in its mount, or
+  when power is connected. After a further 30 minutes without moving Roadguard switches off completely and
+  says so in a silent notification that records again with one tap. Both times are adjustable, and
+  the whole thing can be turned off. See [`docs/architecture.md`](docs/architecture.md) §3.4.
 
 ### Event protection
 - **Multi-stage impact detection**, not a threshold: rolling history, energy and duration
@@ -148,7 +156,7 @@ Needs JDK 21 and the Android SDK (platform 37, build tools 37.0.0). Gradle comes
 pinned by version **and SHA-256**.
 
 ```bash
-./gradlew :app:testDebugUnitTest   # 675 tests
+./gradlew :app:testDebugUnitTest   # 744 tests
 ./gradlew :app:lintDebug
 ./gradlew :app:assembleRelease
 ```
@@ -184,7 +192,7 @@ can actually sideload. See [`docs/build.md`](docs/build.md).
 
 | | |
 | --- | --- |
-| Automated tests | **675 pass, 0 fail** — including 83 Compose UI tests that run on the JVM |
+| Automated tests | **744 pass, 0 fail** — including 86 Compose UI tests that run on the JVM |
 | Android Lint | clean, against a baseline of four reviewed categories |
 | Debug APK | builds, `apksigner verify` passes |
 | Release APK | builds (minified, resource-shrunk), `apksigner verify` passes |
