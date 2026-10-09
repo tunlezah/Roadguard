@@ -97,6 +97,19 @@ class SettingsValidationTest {
     }
 
     @Test
+    fun `recording pauses after ten minutes parked and watches for thirty more`() {
+        // The product owner's numbers: stationary for ten minutes, then a lower-power half hour
+        // in which moving off resumes recording, then off.
+        val defaults = Settings()
+        assertThat(defaults.pauseWhenParked).isTrue()
+        assertThat(defaults.parkAfterMinutes).isEqualTo(10)
+        assertThat(defaults.parkedWatchMinutes).isEqualTo(30)
+        assertThat(PARK_AFTER_MINUTES_RANGE.contains(defaults.parkAfterMinutes)).isTrue()
+        assertThat(PARKED_WATCH_MINUTES_RANGE.contains(defaults.parkedWatchMinutes)).isTrue()
+        assertThat(defaults.parkedWatchMinutes % PARKED_WATCH_STEP_MINUTES).isEqualTo(0)
+    }
+
+    @Test
     fun `validate is a no-op on the shipped defaults`() {
         // Every default must already satisfy every clamp, otherwise the app boots into a
         // state it immediately rewrites.
@@ -225,6 +238,21 @@ class SettingsValidationTest {
     }
 
     @Test
+    fun `validate keeps the parking times where a red light cannot pause a recording`() {
+        fun clamped(after: Int, watch: Int) =
+            SettingsRepository.validate(Settings(parkAfterMinutes = after, parkedWatchMinutes = watch))
+        // Never below five minutes: a long light or a level crossing must not pause a recording.
+        assertThat(clamped(after = 0, watch = 30).parkAfterMinutes).isEqualTo(5)
+        assertThat(clamped(after = -10, watch = 30).parkAfterMinutes).isEqualTo(5)
+        assertThat(clamped(after = 12, watch = 30).parkAfterMinutes).isEqualTo(12)
+        assertThat(clamped(after = 999, watch = 30).parkAfterMinutes).isEqualTo(30)
+        // The watch holds a wake lock, so it is bounded at an hour.
+        assertThat(clamped(after = 10, watch = 0).parkedWatchMinutes).isEqualTo(5)
+        assertThat(clamped(after = 10, watch = 45).parkedWatchMinutes).isEqualTo(45)
+        assertThat(clamped(after = 10, watch = 24 * 60).parkedWatchMinutes).isEqualTo(60)
+    }
+
+    @Test
     fun `validate leaves non-numeric settings untouched`() {
         val hostile = Settings(
             quality = QualitySetting.Uhd2160p,
@@ -257,6 +285,8 @@ class SettingsValidationTest {
                 loopBudgetBytes = 1L,
                 batterySafeThresholdPercent = 250,
                 powerDisconnectStopDelaySeconds = -60,
+                parkAfterMinutes = 1,
+                parkedWatchMinutes = 9_999,
             ),
         )
         assertThat(SettingsRepository.validate(once)).isEqualTo(once)

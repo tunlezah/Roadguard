@@ -59,6 +59,14 @@ import kotlinx.coroutines.launch
  * holds a partial wake lock for exactly as long as [RecordingUiState.holdsWakeLock] says: from the
  * start of a session until its last file has been finalised, which is later than "recording" ends.
  *
+ * ### Parked
+ *
+ * A parked session ([RecorderStatus.Parked]) has released the camera but is still a session, so the
+ * service stays in the foreground: that is what keeps the camera grant, and so what lets recording
+ * resume by itself when the car moves off without the app on screen. It keeps the wake lock for the
+ * watch period too, so the accelerometer can see that happen with the screen off. When the watch
+ * period ends the session does, and the service stands down like after any other stop.
+ *
  * ### Shutdown
  *
  * When the phone powers off, the file being written would be lost without its index. The service
@@ -78,6 +86,13 @@ class RecordingService : LifecycleService() {
     private var postedContent: RecordingNotifications.Content? = null
     private var alertedEpisode: Long? = null
     private var previousStatus: RecorderStatus = RecorderStatus.Idle
+
+    /**
+     * [RecordingUiState.endedWhileParked] as this service instance last saw it, or null before its
+     * first state. The controller outlives services, so a fresh one can be handed an old session's
+     * flag; only a change this instance watched happen deserves the notice.
+     */
+    private var sawEndedWhileParked: Boolean? = null
 
     /**
      * Armed once a session has actually run this service instance, or the driver has pressed Stop.
@@ -291,9 +306,18 @@ class RecordingService : LifecycleService() {
             if (state.isRecording) {
                 notifications.cancelAlert(RecordingNotifications.NOTIFICATION_STOPPED)
                 notifications.cancelAlert(RecordingNotifications.NOTIFICATION_RESUME)
+                notifications.cancelAlert(RecordingNotifications.NOTIFICATION_PARKED)
             }
             previousStatus = status
         }
+
+        // The car stayed parked for the whole watch period and the session switched itself off.
+        val endedWhileParked = state.endedWhileParked
+        if (sawEndedWhileParked == false && endedWhileParked) {
+            val settings = container.settingsSnapshot()
+            notifications.notifyStoppedWhileParked(settings.parkAfterMinutes + settings.parkedWatchMinutes)
+        }
+        sawEndedWhileParked = endedWhileParked
     }
 
     /**

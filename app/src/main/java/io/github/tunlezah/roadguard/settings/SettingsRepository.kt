@@ -99,6 +99,9 @@ class SettingsRepository(private val context: Context) {
         val ON_POWER_DISCONNECTED = stringPreferencesKey("on_power_disconnected")
         val POWER_STOP_DELAY = intPreferencesKey("power_stop_delay")
         val BATTERY_SAFE_THRESHOLD = intPreferencesKey("battery_safe_threshold")
+        val PAUSE_WHEN_PARKED = booleanPreferencesKey("pause_when_parked")
+        val PARK_AFTER_MINUTES = intPreferencesKey("park_after_minutes")
+        val PARKED_WATCH_MINUTES = intPreferencesKey("parked_watch_minutes")
 
         val WEATHER_ENABLED = booleanPreferencesKey("weather_enabled")
 
@@ -153,6 +156,9 @@ class SettingsRepository(private val context: Context) {
             onPowerDisconnected = enumOr(this[Keys.ON_POWER_DISCONNECTED], defaults.onPowerDisconnected),
             powerDisconnectStopDelaySeconds = this[Keys.POWER_STOP_DELAY] ?: defaults.powerDisconnectStopDelaySeconds,
             batterySafeThresholdPercent = this[Keys.BATTERY_SAFE_THRESHOLD] ?: defaults.batterySafeThresholdPercent,
+            pauseWhenParked = this[Keys.PAUSE_WHEN_PARKED] ?: defaults.pauseWhenParked,
+            parkAfterMinutes = this[Keys.PARK_AFTER_MINUTES] ?: defaults.parkAfterMinutes,
+            parkedWatchMinutes = this[Keys.PARKED_WATCH_MINUTES] ?: defaults.parkedWatchMinutes,
             weatherEnabled = this[Keys.WEATHER_ENABLED] ?: defaults.weatherEnabled,
             mapFollowsVehicle = this[Keys.MAP_FOLLOWS] ?: defaults.mapFollowsVehicle,
             mapNorthUp = this[Keys.MAP_NORTH_UP] ?: defaults.mapNorthUp,
@@ -201,6 +207,9 @@ class SettingsRepository(private val context: Context) {
         preferences[Keys.ON_POWER_DISCONNECTED] = onPowerDisconnected.name
         preferences[Keys.POWER_STOP_DELAY] = powerDisconnectStopDelaySeconds
         preferences[Keys.BATTERY_SAFE_THRESHOLD] = batterySafeThresholdPercent
+        preferences[Keys.PAUSE_WHEN_PARKED] = pauseWhenParked
+        preferences[Keys.PARK_AFTER_MINUTES] = parkAfterMinutes
+        preferences[Keys.PARKED_WATCH_MINUTES] = parkedWatchMinutes
         preferences[Keys.WEATHER_ENABLED] = weatherEnabled
         preferences[Keys.MAP_FOLLOWS] = mapFollowsVehicle
         preferences[Keys.MAP_NORTH_UP] = mapNorthUp
@@ -247,6 +256,14 @@ class SettingsRepository(private val context: Context) {
             protectedWarningBytes = settings.protectedWarningBytes.coerceAtLeast(0L),
             powerDisconnectStopDelaySeconds = settings.powerDisconnectStopDelaySeconds.coerceIn(0, 3600),
             batterySafeThresholdPercent = settings.batterySafeThresholdPercent.coerceIn(0, 100),
+            parkAfterMinutes = settings.parkAfterMinutes.coerceIn(
+                PARK_AFTER_MINUTES_RANGE.first,
+                PARK_AFTER_MINUTES_RANGE.last,
+            ),
+            parkedWatchMinutes = settings.parkedWatchMinutes.coerceIn(
+                PARKED_WATCH_MINUTES_RANGE.first,
+                PARKED_WATCH_MINUTES_RANGE.last,
+            ),
         )
     }
 }

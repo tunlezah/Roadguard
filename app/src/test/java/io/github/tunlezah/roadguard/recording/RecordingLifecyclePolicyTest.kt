@@ -42,6 +42,19 @@ class RecordingLifecyclePolicyTest {
             .isTrue()
     }
 
+    @Test
+    fun `a parked session keeps the service, and with it the grant to reopen the camera`() {
+        // Standing down while parked would make resuming by itself impossible: only a camera
+        // service that is already running may open the camera without the app on screen.
+        val parked = RecordingUiState(status = RecorderStatus.Parked)
+        assertThat(ServiceStandDown.shouldStandDown(parked.isSessionActive, parked.holdsWakeLock, armed = true))
+            .isFalse()
+        // ...and once the watch ends the session, it stands down like after any other stop.
+        val asleep = RecordingUiState(status = RecorderStatus.Idle, endedWhileParked = true)
+        assertThat(ServiceStandDown.shouldStandDown(asleep.isSessionActive, asleep.holdsWakeLock, armed = true))
+            .isTrue()
+    }
+
     // ── AutoStartPolicy: opening the app ─────────────────────────────────────────────────
 
     @Test

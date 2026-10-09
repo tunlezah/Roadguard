@@ -24,6 +24,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import io.github.tunlezah.roadguard.location.LocationEngine
 import io.github.tunlezah.roadguard.core.RoadguardContainer
 import io.github.tunlezah.roadguard.recording.AutoStartPolicy
+import io.github.tunlezah.roadguard.recording.RecorderStatus
 import io.github.tunlezah.roadguard.recording.RecordingService
 import io.github.tunlezah.roadguard.settings.OrientationMode
 import io.github.tunlezah.roadguard.settings.Settings as RoadguardSettings
@@ -83,10 +84,13 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val settings by container.settings.collectAsState()
-            val batterySafe by remember {
-                container.recordingController.state.map { it.batterySafe }.distinctUntilChanged()
+            // Battery-safe mode and a parked recorder both let the screen sleep.
+            val letScreenSleep by remember {
+                container.recordingController.state
+                    .map { it.batterySafe || it.status == RecorderStatus.Parked }
+                    .distinctUntilChanged()
             }.collectAsState(initial = false)
-            ApplyWindowPolicy(settings, batterySafe)
+            ApplyWindowPolicy(settings, letScreenSleep)
 
             RoadguardTheme(
                 themeSetting = settings.theme,
@@ -151,10 +155,11 @@ class MainActivity : ComponentActivity() {
      * Applies the orientation and screen-on policy from settings.
      *
      * Battery-safe mode overrides "keep screen on": the display is the largest single draw on a
-     * phone, and recording carries on with the screen off.
+     * phone, and recording carries on with the screen off. So does a parked recorder, which is
+     * saving power by definition and resumes by itself, screen on or off, when the car moves.
      */
     @Composable
-    private fun ApplyWindowPolicy(settings: RoadguardSettings, batterySafe: Boolean) {
+    private fun ApplyWindowPolicy(settings: RoadguardSettings, letScreenSleep: Boolean) {
         LaunchedEffect(settings.orientationMode) {
             requestedOrientation = when (settings.orientationMode) {
                 // fullSensor rather than sensor: a cradle-mounted phone may sit at 180 degrees, and
@@ -165,7 +170,7 @@ class MainActivity : ComponentActivity() {
                 OrientationMode.LockLandscape -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
             }
         }
-        val keepAwake = settings.keepScreenOn && !batterySafe
+        val keepAwake = settings.keepScreenOn && !letScreenSleep
         LaunchedEffect(keepAwake) {
             if (keepAwake) {
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)

@@ -81,6 +81,7 @@ class RecordingNotificationContentTest {
             RecorderStatus.Recovering to Actions.ProtectAndStop,
             RecorderStatus.Stopping to Actions.None,
             RecorderStatus.Failed to Actions.Record,
+            RecorderStatus.Parked to Actions.RecordAndStop,
         )
         assertThat(expected.keys).containsExactlyElementsIn(RecorderStatus.entries)
         for ((status, actions) in expected) {
@@ -125,6 +126,27 @@ class RecordingNotificationContentTest {
         )
         val text = content(state).text
         assertThat(text.split(blocker.message).size - 1).isEqualTo(1)
+    }
+
+    @Test
+    fun `parked says so, offers to record now or stop, and claims no recording profile`() {
+        val content = content(RecordingUiState(status = RecorderStatus.Parked, profile = profile()), "1 MB of 2 MB")
+        assertThat(content.title).contains("parked")
+        assertThat(content.text).contains("resumes when the car moves")
+        // The profile is still in the state from the last binding, but nothing is recording at it.
+        assertThat(content.text).doesNotContain(profile().label)
+        assertThat(content.iconRes).isEqualTo(R.drawable.ic_local_parking)
+        assertThat(content.actions).isEqualTo(Actions.RecordAndStop)
+        // Still a session: the notification is what keeps the service, and the camera grant, alive.
+        assertThat(content.ongoing).isTrue()
+    }
+
+    @Test
+    fun `the parked switch-off notice says how long and that it will not restart by itself`() {
+        val message = RecordingNotifications.parkedStopMessage(40)
+        assertThat(message).contains("40 minutes")
+        assertThat(message).contains("will not start again by itself")
+        assertThat(message).contains("Tap to record")
     }
 
     @Test

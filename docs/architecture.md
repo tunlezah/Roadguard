@@ -119,7 +119,8 @@ Three more platform facts shape the service:
   that was stopped keeps recording in the background. So once the recorder is idle and no clip is
   still being finalised, the service leaves the foreground and stops itself (`ServiceStandDown`,
   which is pure and tested); `onDestroy` then releases the wake lock and detaches the controller,
-  turning those listeners off. A later start makes a fresh service. Power monitoring is the one
+  turning those listeners off. A parked session (§3.4) is still a session, so its service stays,
+  for the watch period only. A later start makes a fresh service. Power monitoring is the one
   thing kept process-lifetime (a single sticky-broadcast receiver, no polling), because "start
   when power is connected **while the app is open**" is owned by the Activity — the only place a
   camera service may legally be promoted — not by a service lingering between drives.
@@ -162,9 +163,9 @@ camera mid-segment, because rebinding mid-segment means a truncated file.
 
 ### 3.2 Failure handling
 
-A session ends only when the user, the power policy or a nearly flat battery ends it. Anything
-else that stops the frames moves the recorder to `Recovering` — "Reconnecting" on screen and in
-the notification — and `RecoveryPolicy` brings it back:
+A session ends only when the user, the power policy, a nearly flat battery or a long stay parked
+(§3.4) ends it. Anything else that stops the frames moves the recorder to `Recovering` —
+"Reconnecting" on screen and in the notification — and `RecoveryPolicy` brings it back:
 
 | Failure | Detected by | Recovery |
 | --- | --- | --- |
@@ -206,6 +207,64 @@ its next step. A Stop pressed during the start-up countdown, or landing mid-roll
 can never be followed by a segment nobody asked for. A recovery attempt that has begun is never
 cancelled part-way; only one still waiting out its delay is replaced, because cancelling mid-bind
 would leave the camera bound to a configuration the controller has no record of.
+
+### 3.4 Parking: pausing a recording that has stopped moving
+
+A car parked for an hour does not need an hour of footage of a car park. So a session goes
+through three tiers, decided once a second by `ParkingPolicy` (pure, tested):
+
+| Tier | When | What runs | What it costs |
+| --- | --- | --- | --- |
+| **Recording** | the vehicle is moving, or has not been still for long | everything | the usual |
+| **Parked** (`RecorderStatus.Parked`) | still for *Pause after* (10 min by default) | the foreground service, its wake lock, and the accelerometer at 25 Hz — nothing else | camera, encoder, GNSS, gyroscope and screen-on all released |
+| **Asleep** | parked for *Watch for* (30 min by default) without moving | nothing: the session has ended and the service has stood down | nothing |
+
+**Deciding that the vehicle is still** is `StillnessTracker`'s job, and it is deliberately
+lopsided, because pausing a recording that should have carried on loses footage while recording
+a stationary car only costs battery:
+
+* **The accelerometer must positively show stillness for the whole period.** Each second's
+  samples are reduced (`MotionMeter`) to a vibration figure — the three-axis standard deviation of
+  linear acceleration with each axis's mean removed, so a fused sensor's constant bias reads as
+  still — and the direction of gravity. Sustained shaking (5 of the last 10 seconds above
+  0.10 m/s²) or the phone turning restarts the count; a door closing or a gust is a second or two
+  and does not. With no motion data at all the vehicle is never judged still, and a hole in the
+  data restarts the count: what was not seen cannot be vouched for.
+* **GNSS can only veto.** A filtered speed of 9 km/h or more, or a position further from where
+  the still period began than both fixes' accuracies plus 25 m (and never less than 40 m), counts
+  as movement — but only on two consecutive fixes, because a parked receiver wanders by tens of
+  metres and reports a few km/h now and then. Positions vaguer than 30 m are ignored. GNSS is not
+  required, because there is none in an underground car park, where the accelerometer has to be
+  enough.
+
+**Parking** is a stop's teardown that leaves the session running: the clip is finalised while
+the camera is still bound, the trip is closed and named, and the camera, encoder and GNSS are let
+go. The session and its `camera` foreground service carry on, and that is the point: the service
+was promoted from a visible Activity, and only while it keeps running may the camera be reopened
+without the app on screen (§3). The screen is allowed to sleep, as in battery-safe mode.
+
+**Resuming** happens on any of: the `MovementWatch` seeing the car move off — sustained moderate
+shaking (5 of 8 seconds between 0.12 and 2 m/s², the phone not turning) *with the phone still
+sitting within 25° of the pose it was parked in*, which is what stops a driver who took the phone
+with them from starting a recording in their pocket; GNSS at 18 km/h or more on three consecutive
+fixes, whatever the pose, when something else has GNSS running (Roadguard does not turn it on
+itself while parked); power being connected, when the driver has power start recording; or Record
+being pressed. A resume is a camera bring-up without the start-up checks — the session already
+began — so a failure from there is an ordinary recovery (§3.2), not the end of the session. When
+the vehicle is already moving there is no start-up countdown.
+
+**Sleeping** ends the session the way a stop does, so the service stands down and Roadguard
+holds no wake lock, sensor or receiver at all. It does *not* set the explicit-Stop latch, so
+opening the app or power arriving while it is open starts recording as usual, and a quiet
+notification says what happened and records again with one tap. Recording cannot come back by
+itself from here: once the service has gone, Android does not let an app start the camera from
+the background, and keeping the service alive indefinitely would be neither "lowest power" nor
+honest about what the phone is doing.
+
+The thresholds are reasoned, not measured (`docs/testing.md` §5.6), and are gathered in
+`ParkingTuning` so real traces can replace them. Diagnostics shows the live evidence — whether
+motion data is arriving, the current vibration, how long the vehicle has been still, and what
+last counted as movement — so they can be tuned on a real phone.
 
 ## 4. Camera orientation — the boring, normal way
 

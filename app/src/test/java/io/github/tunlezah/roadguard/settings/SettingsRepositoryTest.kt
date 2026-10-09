@@ -162,6 +162,9 @@ class SettingsRepositoryTest {
             onPowerDisconnected = PowerDisconnectedAction.StopAfterDelay,
             powerDisconnectStopDelaySeconds = 45,
             batterySafeThresholdPercent = 40,
+            pauseWhenParked = false,
+            parkAfterMinutes = 20,
+            parkedWatchMinutes = 45,
             weatherEnabled = true,
             mapFollowsVehicle = false,
             mapNorthUp = true,
@@ -189,6 +192,8 @@ class SettingsRepositoryTest {
             loopBudgetBytes = 1L,
             batterySafeThresholdPercent = 300,
             powerDisconnectStopDelaySeconds = -5,
+            parkAfterMinutes = 0,
+            parkedWatchMinutes = 10_000,
         )
         // The value type itself does no clamping, so anything clamped below came from the
         // repository...
@@ -207,6 +212,8 @@ class SettingsRepositoryTest {
         assertThat(stored.loopBudgetBytes).isEqualTo(LoopBudget.MIN_BYTES)
         assertThat(stored.batterySafeThresholdPercent).isEqualTo(100)
         assertThat(stored.powerDisconnectStopDelaySeconds).isEqualTo(0)
+        assertThat(stored.parkAfterMinutes).isEqualTo(PARK_AFTER_MINUTES_RANGE.first)
+        assertThat(stored.parkedWatchMinutes).isEqualTo(PARKED_WATCH_MINUTES_RANGE.last)
         assertThat(stored).isEqualTo(SettingsRepository.validate(hostile))
     }
 

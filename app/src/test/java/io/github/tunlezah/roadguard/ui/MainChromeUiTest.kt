@@ -203,6 +203,46 @@ class MainChromeUiTest {
     }
 
     @Test
+    fun `parked offers to record now and to stop, and nothing to protect`() {
+        setControlBar(state(RecorderStatus.Parked))
+
+        // Nothing is recording, so the main control resumes rather than stops...
+        compose.onNodeWithContentDescription("Resume recording").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Stop recording").assertDoesNotExist()
+        // ...and Stop takes the place of a Protect that would have nothing to protect.
+        compose.onNodeWithText("Stop recording").assertIsDisplayed()
+        compose.onNodeWithText("Protect recording").assertDoesNotExist()
+    }
+
+    @Test
+    fun `while parked, resume starts and stop stops`() {
+        var starts = 0
+        var stops = 0
+        compose.setContent {
+            RoadguardTheme {
+                MainControlBar(
+                    state = state(RecorderStatus.Parked),
+                    compact = true,
+                    onProtect = { error("nothing to protect while parked") },
+                    onToggleMap = {},
+                    onOpenSettings = {},
+                    onOpenGallery = {},
+                    onStartRecording = { starts++ },
+                    onStopRecording = { stops++ },
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("Resume recording").performClick()
+        assertThat(starts).isEqualTo(1)
+        assertThat(stops).isEqualTo(0)
+
+        compose.onNodeWithText("Stop").performClick()
+        assertThat(starts).isEqualTo(1)
+        assertThat(stops).isEqualTo(1)
+    }
+
+    @Test
     fun `gallery and settings are reachable and described`() {
         setControlBar(MainUiState())
 
@@ -272,6 +312,15 @@ class MainChromeUiTest {
         setStatusBar(MainUiState(settings = Settings(locationEnabled = false)))
 
         compose.onNodeWithContentDescription("Speed unavailable").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a parked recorder says so, and that it will resume`() {
+        setStatusBar(state(RecorderStatus.Parked))
+
+        compose.onNodeWithContentDescription("Parked: recording is paused and resumes when the car moves")
+            .assertExists()
+        compose.onNodeWithText("Parked", useUnmergedTree = true).assertExists()
     }
 
     @Test

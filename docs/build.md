@@ -198,7 +198,7 @@ archive the app would reject. See `docs/offline-maps.md` §5.
 
   ```bash
   python3 tools/generate_icons.py         # launcher icons from icon.png
-  python3 tools/fetch_material_icons.py   # the 62 referenced Material icons, verbatim
+  python3 tools/fetch_material_icons.py   # the 64 referenced Material icons, verbatim
   python3 tools/check_material_icons.py   # fails if referenced/bundled/listed sets diverge
   python3 tools/fetch_map_assets.py       # glyphs and sprites
   python3 tools/generate_map_styles.py    # day and night styles

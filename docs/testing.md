@@ -15,32 +15,38 @@
 ./gradlew :app:testDebugUnitTest
 ```
 
-**675 tests. 0 failures. 0 errors. 0 skipped.** About 50 seconds of test execution on a warm
+**744 tests. 0 failures. 0 errors. 0 skipped.** About 50 seconds of test execution on a warm
 build.
 
 | Suite | Tests | What it holds in place |
 | --- | --- | --- |
 | `RecordingProfileSelectorTest` | 54 | The whole Auto decision table: tier ceilings, thermal step-down, camera and encoder support, frame-rate caps, bitrate scaling, dual-camera and stabilisation gating, and the rationale strings; the battery-safe 720p30 ceiling; and the safe fallbacks a refused camera configuration drops to |
-| `SettingsValidationTest` | 36 | Every numeric setting clamps; no persisted value can put the recorder in an impossible state; the removed GPS modes map onto today's two settings |
+| `SettingsValidationTest` | 38 | Every numeric setting clamps; no persisted value can put the recorder in an impossible state; the removed GPS modes map onto today's two settings; parking never below five minutes, its watch never above an hour |
 | `StorageBudgetTest` | 32 | Reserve arithmetic at both bounds, trim trigger and target, `keepNewest`, protected exclusion, zero and pathological budgets |
 | `ThermalPolicyTest` | 25 | Immediate escalation, the 90 s de-escalation hold, single-step descent, signal priority, battery fallback only when nothing better exists |
 | `ProtectionPlannerTest` | 25 | Overlap-not-containment, boundary-straddling events claiming both segments, in-progress segments counting only to *now*, crash-interrupted recovery |
 | `PlaceRankingTest` | 14 | Which suburb, town or city a coordinate is named after, against the places decoded from the real archives around Canberra: the 3/8/20 km radii, population settling Canberra over Queanbeyan, towns never standing in for cities, duplicate collapse |
 | `StorageReconcilerTest` | 13 | **Robolectric**, real files and an in-memory Room database. An empty or unreadable recordings folder never empties the index; a missing chosen volume stops the pass; an interrupted clip is recovered or quarantined by what its file holds, and left alone when it is whole but unreadable; a finished clip with no index, or an index cut short, is quarantined and the one before it kept; a lost file is adopted, or left in place when whole but unreadable |
 | `Mp4InspectorTest` | 6 | **Robolectric.** Playable, whole-but-unread and truncated verdicts follow the file's bytes; an index box cut short at the end of the file does not count as an index; the box scan stops at a box that overruns |
-| `MainChromeUiTest` | 27 | **Compose UI.** Start/stop mapping to recorder state — including Stop during the start-up countdown and while reconnecting — protect enabled across a rollover and while reconnecting, every control's content description, status chips appearing and disappearing correctly |
+| `MainChromeUiTest` | 30 | **Compose UI.** Start/stop mapping to recorder state — including Stop during the start-up countdown and while reconnecting, and Resume plus Stop while parked — protect enabled across a rollover and while reconnecting, every control's content description, status chips appearing and disappearing correctly |
 | `PreviewFitTest` | 19 | Auto fill-to-panel, the 1.35× ceiling, road bias, crop and letterbox reporting, degenerate inputs |
 | `ImpactDetectorTest` | 19 | Every detector stage: windowing, features, each discriminator, confidence arithmetic, cooldown |
 | `SegmentPlannerTest` | 18 | Rollover reason priority, the 20-second minimum, queued reconfiguration |
 | `RecordingControllerStopTest` | 5 | A user-initiated stop settles on *Idle*, never parking in the transient *Stopping* state; a second stop is harmless; a Stop pressed straight after Start wins; a start with no recording service fails visibly; a shutdown with nothing recording changes nothing |
 | `PowerPolicyTest` | 24 | The low-battery stop and its charging exemption, the power-connect and disconnect behaviours, when battery-safe mode applies, that it only ever tightens the thermal plan and leaves the overlay alone, and the one-minute debounce against a flickering charger |
 | `RecoveryPolicyTest` | 16 | Recovery never gives up: the fast-then-slow retry schedule, forced rebinds, the five-minute wake-lock budget, the 30-second alert, and what each kind of failure asks for |
-| `RecordingNotificationContentTest` | 9 | What the recording notification says and offers in every state, including *reconnecting* and *stopped*, and that progress alone never re-posts it |
-| `RecordingUiStateTest` | 7 | When the wake lock is held (until the last file is closed), when a session counts as active, and when Protect is offered |
+| `RecordingNotificationContentTest` | 11 | What the recording notification says and offers in every state, including *reconnecting*, *stopped* and *parked*, the quiet notice when a parked session switches off, and that progress alone never re-posts it |
+| `RecordingUiStateTest` | 8 | When the wake lock is held (until the last file is closed, and through the parked watch), when a session counts as active, and when Protect is offered |
+| `StillnessTrackerTest` | 17 | When the vehicle is *verifiably* still: no motion data is never still, nor are the first seconds of a drive; a door or a gust does not restart the count, an engine left running does; GNSS speed and position veto only on consecutive fixes, inside an accuracy-scaled radius |
+| `MovementWatchTest` | 12 | When a parked recording comes back: a cradled phone shaken like a moving car trips it in seconds; lying flat, walking, a turning hand, a door or sensor noise do not; GNSS at driving pace does, whatever the pose |
+| `ParkingPolicyTest` | 8 | The three tiers: park only after the whole time and only from a running session, resume on movement or when switched off, sleep only once the watch is over, and movement beats sleep |
+| `ParkingTraceTest` | 6 | Seeded synthetic traces through the whole pipeline, raw samples to decision: a parked phone's noise is ten minutes of stillness, a drive's vibration — even a smooth road's — never is, drive–park–wait–drive-off lands in each tier at the right moment, and walking off with the phone or leaving it on a seat never resumes |
+| `MotionMeterTest` | 8 | One-second accelerometer windows: a constant bias reads as still, vibration spans all three axes, gravity is averaged as a direction and the zero placeholder is skipped |
+| `GravitySmoothingTest` | 4 | The derived gravity filter keeps its half-second time constant at 100 Hz and at the parked watch's 25 Hz |
 | `ForegroundServiceTypesTest` | 5 | The service claims location and microphone only with both the setting and the permission, so a declined permission can never stop recording |
 | `MapWorkBudgetTest` | 5 | The thermal and battery-safe map budgets really reduce map work: no animation when reduced, off screen when frozen |
 | `SessionJournalTest` | 7 | **Robolectric.** An interrupted session survives a process restart and produces exactly one resume prompt; a deliberate stop produces none; and an explicit Stop latch survives a restart, is independent of the interrupted-session flag, and clears on a manual start |
-| `RecordingLifecyclePolicyTest` | 5 | The service stands down only when armed, idle and holding no wake lock; opening the app and vehicle power auto-start only when set up, enabled and not standing down after an explicit Stop or an active session |
+| `RecordingLifecyclePolicyTest` | 6 | The service stands down only when armed, idle and holding no wake lock, and never while parked; opening the app and vehicle power auto-start only when set up, enabled and not standing down after an explicit Stop or an active session |
 | `SettingsComponentsUiTest` | 16 | **Compose UI.** Disabled rows still explaining themselves, the picker showing unsupported options greyed with a reason, sliders announcing values in words |
 | `SensorTraceTest` | 16 | Synthetic pothole / speed-bump / handling / braking / impact traces classifying as intended |
 | `DeviceTierScorerTest` | 16 | Every scoring combination, and both vetoes (`isLowRamDevice`, no hardware 1080p encoder) |
@@ -183,6 +189,18 @@ designed around. They prove the classifier behaves as designed on inputs shaped 
 expects. They do not prove those shapes match a real car, a real cradle or a real collision.
 `docs/event-detection.md` §9 is the procedure.
 
+### 5.6 Parking thresholds have no real drive data either
+
+Every number in `ParkingTuning` — the 0.10 m/s² stillness line, the 0.12–2 m/s² band that counts
+as driving off, the 25° pose tolerance, the GNSS radius and speeds — is reasoned from sensor
+physics and published accelerometer noise figures, not measured in a car. The unit tests prove
+the logic does what the numbers say; only a drive can say whether the numbers are right. Two
+platform behaviours are also unverified: that a `camera` foreground service which has released
+the camera may reopen it from the background after half an hour parked (the research says it may,
+§2 of `docs/research/android-platform-restrictions.md`), and that the parked watch's wake lock
+keeps the accelerometer flowing once the phone has dropped into Doze. The Diagnostics *Parking*
+section shows the live evidence for tuning, and §6.11 below is the test plan.
+
 ## 6. Manual test plan for someone with a device
 
 In priority order. Items 1–4 are the ones that would find a real bug fastest.
@@ -317,6 +335,28 @@ In priority order. Items 1–4 are the ones that would find a real bug fastest.
 47. Open a clip, rotate the phone, press Home mid-playback and come back. Expect playback to
     continue across the rotation and to resume paused at the same position from the background.
     Open a clip that is still being recorded: expect "still being recorded", not "damaged".
+
+### 6.11 Parking
+
+48. Record, park, switch the engine off and leave the phone in its cradle. Expect *Parked* after
+    ten minutes (Diagnostics → Parking shows the count), the last clip playable, the camera
+    indicator gone, the screen allowed to time out, and `adb shell dumpsys power | grep Roadguard`
+    still showing the wake lock.
+49. Drive off within the next 30 minutes, screen off. Expect recording back within about ten
+    seconds of moving, with no countdown, and a new trip unless you left within two minutes.
+50. Park again and connect power (ignition on) without moving. Expect recording at once.
+51. Park, take the phone out of its cradle and walk around with it, and put it down flat on a
+    table. Expect it to stay *Parked*: none of that is the car moving.
+52. Park and do not come back. Expect Roadguard to switch off after 40 minutes in all: the
+    ongoing notification gone and a silent "Recording stopped while parked" one in its place, no
+    wake lock, and a tap on that notification to open the app recording.
+53. Sit in a stationary car with the engine idling for 15 minutes. Note whether it parks —
+    Diagnostics shows the vibration it measured — and report the figure; idle vibration is the
+    reading most likely to need tuning.
+54. Stop at a long red light or a level crossing. Expect nothing at all: no pause is possible in
+    under five minutes, and none by default in under ten.
+55. Park in an underground car park, where there is no GNSS fix. Expect it to park all the same,
+    on the accelerometer alone.
 
 ## 7. How to add a test
 
